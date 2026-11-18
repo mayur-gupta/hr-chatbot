@@ -1,0 +1,6 @@
+node_modules/
+dist/
+.env
+data/
+.chroma-venv/
+web/dist/

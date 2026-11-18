@@ -1,0 +1,44 @@
+{
+  "name": "kalvora-hr-ingest",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "chroma": "node scripts/chroma-server.mjs",
+    "ingest": "tsx src/pipeline.ts",
+    "ingest:dry": "tsx src/pipeline.ts --dry-run",
+    "smoke": "tsx src/smoke.ts",
+    "ask": "tsx src/ask.ts",
+    "server": "tsx src/server.ts",
+    "web": "vite --config web/vite.config.ts",
+    "build:web": "vite build --config web/vite.config.ts",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p web",
+    "test": "vitest run",
+    "chroma:setup": "node scripts/chroma-setup.mjs",
+    "chroma:docker": "node scripts/chroma-server.mjs --docker"
+  },
+  "dependencies": {
+    "chromadb": "^3.5.0",
+    "cli-progress": "^3.12.0",
+    "commander": "^15.1.0",
+    "dotenv": "^18.0.10",
+    "jszip": "^3.10.2",
+    "mammoth": "^1.13.0",
+    "node-html-parser": "^9.0.7",
+    "openai": "^7.57.0",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/cli-progress": "^3.11.6",
+    "@types/node": "^26.6.6",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.3.0",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^5.1.0"
+  }
+}
