@@ -15,13 +15,18 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p web",
     "test": "vitest run",
     "chroma:setup": "node scripts/chroma-setup.mjs",
-    "chroma:docker": "node scripts/chroma-server.mjs --docker"
+    "chroma:docker": "node scripts/chroma-server.mjs --docker",
+    "models": "tsx src/models.ts",
+    "export-index": "tsx src/exportIndex.ts",
+    "build:vercel": "npm run build:web && node scripts/build-vercel.mjs"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.119.2",
     "chromadb": "^3.5.0",
     "cli-progress": "^3.12.0",
     "commander": "^15.1.0",
     "dotenv": "^18.0.10",
+    "google-auth-library": "^11.3.4",
     "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
     "node-html-parser": "^9.0.7",
@@ -36,9 +41,13 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^6.3.0",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
     "vitest": "^5.1.0"
+  },
+  "engines": {
+    "node": "24.x"
   }
 }

@@ -1,20 +1,10 @@
-/** Query side of the RAG: detect countries, embed the question, search Chroma. */
-import type { Collection, Where } from "chromadb";
+/** Query side of the RAG: detect countries, embed the question, search the vector store. */
 import type { Settings } from "./config.js";
 import { Embedder } from "./embedder.js";
-import { chromaClient, ensureChromaUp } from "./store.js";
+import type { Hit } from "./types.js";
+import { openSearchStore, type SearchStore } from "./vectorStore.js";
 
-export interface Hit {
-  id: string;
-  text: string;
-  docId: string;
-  title: string;
-  country: string;
-  countryCode: string;
-  sectionNo: number;
-  sectionTitle: string;
-  distance: number;
-}
+export type { Hit } from "./types.js";
 
 /** Country names/adjectives (case-insensitive) and acronyms (case-sensitive, so "us"/"in" don't match). */
 const COUNTRIES: { code: string; names: string[]; acronyms: string[] }[] = [
@@ -51,21 +41,20 @@ export function detectCountries(text: string): string[] {
 export class Retriever {
   private constructor(
     private embedder: Embedder,
-    private col: Collection,
+    readonly store: SearchStore,
   ) {}
 
   static async open(settings: Settings): Promise<Retriever> {
+    const store = await openSearchStore(settings);
     const embedder = new Embedder(settings);
-    await embedder.healthCheck();
-    const client = chromaClient(settings);
-    await ensureChromaUp(client, settings);
-    let col: Collection;
-    try {
-      col = await client.getCollection({ name: settings.collection });
-    } catch {
-      throw new Error(`Collection "${settings.collection}" not found. Run the ingestion first: npm run ingest`);
+    if (store.dim) {
+      // File index: the dimension is known, so skip the probe request. On a serverless cold
+      // start that saves a round trip and a request against free-tier rate limits.
+      embedder.dimension = store.dim;
+    } else {
+      await embedder.healthCheck();
     }
-    return new Retriever(embedder, col);
+    return new Retriever(embedder, store);
   }
 
   /**
@@ -75,34 +64,11 @@ export class Retriever {
    */
   async retrieve(query: string, k: number, countries: string[] = []): Promise<Hit[]> {
     const [vector] = await this.embedder.embedQueries([query]);
-    if (!countries.length) return this.search(vector, k);
+    if (!countries.length) return this.store.search(vector, k);
 
     const perCountry = Math.max(2, Math.ceil(k / countries.length));
-    const groups = await Promise.all(countries.map((cc) => this.search(vector, perCountry, { country_code: cc })));
+    const groups = await Promise.all(countries.map((cc) => this.store.search(vector, perCountry, cc)));
     const hits = groups.flat().sort((a, b) => a.distance - b.distance);
-    return hits.length ? hits : this.search(vector, k);
-  }
-
-  private async search(vector: number[], k: number, where?: Where): Promise<Hit[]> {
-    const res = await this.col.query({
-      queryEmbeddings: [vector],
-      nResults: k,
-      where,
-      include: ["documents", "metadatas", "distances"],
-    });
-    return res.ids[0].map((id, j) => {
-      const m = res.metadatas[0][j] ?? {};
-      return {
-        id,
-        text: res.documents[0][j] ?? "",
-        docId: String(m.doc_id),
-        title: String(m.title),
-        country: String(m.country),
-        countryCode: String(m.country_code),
-        sectionNo: Number(m.section_no),
-        sectionTitle: String(m.section_title),
-        distance: res.distances[0][j] ?? NaN,
-      };
-    });
+    return hits.length ? hits : this.store.search(vector, k);
   }
 }

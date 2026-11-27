@@ -1,0 +1,87 @@
+name: Pipeline
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Runtime settings (model keys, SESSION_SECRET, GOOGLE_CLIENT_ID...) live in the Vercel project's
+# environment variables, not here. The build needs no secrets.
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+  VERCEL_CLI: vercel@65.11.0
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    concurrency: { group: "verify-${{ github.ref }}", cancel-in-progress: true }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test # no network; the data/index check skips here (the index isn't in git)
+      - run: npm run build:vercel # proves the deploy bundle builds
+      - run: npm audit --omit=dev --audit-level=high
+
+  deploy-preview:
+    # Fork PRs get no secrets, so no preview (the safe default).
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: { name: preview, url: "https://${{ vars.STAGING_HOST }}" }
+    concurrency: { group: preview, cancel-in-progress: true } # one stable alias => one preview at a time
+    permissions: { contents: read, pull-requests: write }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run build:vercel # writes .vercel/output (UI + bundled function; vectors live in Supabase)
+      - run: npm i -g "$VERCEL_CLI"
+      - id: deploy
+        run: echo "url=$(vercel deploy --prebuilt --token="${{ secrets.VERCEL_TOKEN }}")" >> "$GITHUB_OUTPUT"
+      - run: vercel alias set "${{ steps.deploy.outputs.url }}" "${{ vars.STAGING_HOST }}" --token="${{ secrets.VERCEL_TOKEN }}"
+      - name: Smoke test (signed in, asks one question)
+        run: node scripts/smoke-deploy.mjs "https://${{ vars.STAGING_HOST }}" --with-session
+        env:
+          SMOKE_SESSION_SECRET: ${{ secrets.SMOKE_SESSION_SECRET }}
+          SMOKE_EMAIL: ${{ vars.SMOKE_EMAIL }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const body = [
+              `Preview: https://${{ vars.STAGING_HOST }}`,
+              `Deployment: ${{ steps.deploy.outputs.url }}`,
+              `Commit: ${context.sha.slice(0, 7)}`,
+            ].join("\n");
+            await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
+
+  deploy-production:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    # Add a required reviewer to this environment in repo settings for a manual approval gate
+    # (free on public repos; private repos need a paid GitHub plan).
+    environment: { name: production, url: "https://${{ vars.PRODUCTION_HOST }}" }
+    concurrency: { group: production, cancel-in-progress: false }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run build:vercel # writes .vercel/output (UI + bundled function; vectors live in Supabase)
+      - run: npm i -g "$VERCEL_CLI"
+      - id: deploy
+        run: echo "url=$(vercel deploy --prebuilt --prod --token="${{ secrets.VERCEL_TOKEN }}")" >> "$GITHUB_OUTPUT"
+      - name: Smoke test (public checks only; the production session secret never leaves Vercel)
+        run: node scripts/smoke-deploy.mjs "https://${{ vars.PRODUCTION_HOST }}"
+      - name: Roll back on failure
+        if: failure() && steps.deploy.outcome == 'success'
+        run: vercel rollback --yes --token="${{ secrets.VERCEL_TOKEN }}"

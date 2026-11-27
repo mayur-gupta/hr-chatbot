@@ -61,3 +61,17 @@ export interface Chunk {
   text: string;
   metadata: ChunkMetadata;
 }
+
+/** One search result, whichever vector store produced it. */
+export interface Hit {
+  id: string;
+  text: string;
+  docId: string;
+  title: string;
+  country: string;
+  countryCode: string;
+  sectionNo: number;
+  sectionTitle: string;
+  /** Cosine distance (0 = identical). */
+  distance: number;
+}

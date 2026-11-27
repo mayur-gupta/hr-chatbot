@@ -7,8 +7,10 @@ import { loadManifest } from "./manifest.js";
 import { parseDocx } from "./parser.js";
 import { chunkDocument } from "./chunker.js";
 import { Embedder } from "./embedder.js";
-import { chromaClient, deleteStale, ensureChromaUp, existingHashes, openCollection, upsertChunks } from "./store.js";
+import { openIngestStore } from "./vectorStore.js";
 import type { Chunk } from "./types.js";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 interface Options {
   country?: string;
@@ -19,16 +21,17 @@ interface Options {
 
 const program = new Command()
   .name("ingest")
-  .description("Ingest the Kalvora HR policy corpus into ChromaDB")
+  .description("Ingest the Kalvora HR policy corpus into the vector store (Chroma or the file index)")
   .option("-c, --country <code>", "only ingest one country code (e.g. GB, IN)")
   .option("-l, --limit <n>", "only ingest the first N documents", (v) => parseInt(v, 10))
   .option("--dry-run", "parse + chunk + write data/chunks.jsonl; no embedding or DB writes", false)
-  .option("--reset", "drop and rebuild the collection", false);
+  .option("--reset", "drop and rebuild the collection / index", false);
 
 async function main(): Promise<void> {
   const opts = program.parse().opts<Options>();
   const settings = loadSettings();
   const t0 = Date.now();
+  if (!settings.corpusDir) throw new Error("CORPUS_DIR is required for ingestion (see .env.example)");
 
   // 1. Discover
   const { records: all, warnings } = loadManifest(settings.corpusDir);
@@ -74,14 +77,13 @@ async function main(): Promise<void> {
   // 5. Embedder health check
   const embedder = new Embedder(settings);
   const dim = await embedder.healthCheck();
-  console.log(`LM Studio OK: ${settings.embedModel} (dim ${dim})`);
+  console.log(`Embeddings OK: ${settings.embedModel} at ${settings.embed.baseUrl} (dim ${dim})`);
 
   // 6. Store
-  const client = chromaClient(settings);
-  await ensureChromaUp(client, settings);
-  const col = await openCollection(client, settings, dim, opts.reset);
+  const store = await openIngestStore(settings, dim, opts.reset);
+  console.log(`Store: ${store.label}`);
 
-  const existing = await existingHashes(col, chunks.map((c) => c.id));
+  const existing = await store.existingHashes(chunks.map((c) => c.id));
   const todo = chunks.filter((c) => existing.get(c.id) !== c.metadata.content_hash);
   const created = todo.filter((c) => !existing.has(c.id)).length;
   const updated = todo.length - created;
@@ -93,16 +95,18 @@ async function main(): Promise<void> {
     for (let i = 0; i < todo.length; i += settings.batchSize) {
       const batch = todo.slice(i, i + settings.batchSize);
       const vectors = await embedder.embedDocuments(batch.map((c) => c.text));
-      await upsertChunks(col, batch, vectors); // upsert per batch so progress survives a crash
+      await store.upsert(batch, vectors); // per batch, so progress survives a crash
       bar.increment(batch.length);
+      if (settings.embedDelayMs && i + settings.batchSize < todo.length) await sleep(settings.embedDelayMs);
     }
     bar.stop();
   }
 
   const keep = new Set(chunks.map((c) => c.id));
-  const removed = await deleteStale(col, [...docChunkIds.keys()], keep);
+  const removed = await store.deleteStale([...docChunkIds.keys()], keep);
+  await store.flush();
   console.log(`Stale chunks deleted: ${removed}`);
-  console.log(`Collection "${settings.collection}" now holds ${await col.count()} chunks`);
+  console.log(`${store.label} now holds ${await store.count()} chunks`);
   report(failures, t0);
 }
 

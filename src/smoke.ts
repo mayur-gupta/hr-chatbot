@@ -1,12 +1,11 @@
-/** Retrieval sanity checks against the ingested collection. */
-import type { Where } from "chromadb";
+/** Retrieval sanity checks against the configured vector store (Chroma or the file index). */
 import { loadSettings } from "./config.js";
-import { Embedder } from "./embedder.js";
-import { chromaClient, ensureChromaUp } from "./store.js";
+import { Retriever } from "./retriever.js";
 
 interface Case {
   query: string;
-  where?: Where;
+  /** Restrict the search to this country (like the UI's country filter). */
+  filter?: string;
   /** Pass if one of the top `within` results has one of these doc ids (and section, if given). */
   expectDocs: string[];
   expectSection?: number;
@@ -17,7 +16,7 @@ interface Case {
 
 const CASES: Case[] = [
   { query: "How many weeks of paid partner leave do UK employees get?", expectDocs: ["KAL-GB-HR-017"], expectSection: 6, within: 3, country: "GB" },
-  { query: "How many weeks of paid partner leave do employees get?", where: { country_code: "IN" }, expectDocs: ["KAL-IN-HR-017"], within: 5, country: "IN" },
+  { query: "How many weeks of paid partner leave do employees get?", filter: "IN", expectDocs: ["KAL-IN-HR-017"], within: 5, country: "IN" },
   { query: "What is the notice period for resignation in Germany?", expectDocs: ["KAL-DE-HR-049", "KAL-DE-HR-050"], within: 5, country: "DE" },
   { query: "India Labour Codes November 2025 change", expectDocs: [], expectSection: 14, within: 5, country: "IN" },
   { query: "How much maternity leave do employees in Singapore get?", expectDocs: ["KAL-SG-HR-016"], within: 3, country: "SG" },
@@ -31,31 +30,17 @@ const CASES: Case[] = [
 
 async function main(): Promise<void> {
   const settings = loadSettings();
-  const embedder = new Embedder(settings);
-  await embedder.healthCheck();
-  const client = chromaClient(settings);
-  await ensureChromaUp(client, settings);
-  const col = await client.getCollection({ name: settings.collection });
-  console.log(`Collection "${settings.collection}": ${await col.count()} chunks\n`);
+  const retriever = await Retriever.open(settings);
+  console.log(`${retriever.store.label}: ${await retriever.store.count()} chunks
+`);
 
-  const vectors = await embedder.embedQueries(CASES.map((c) => c.query));
   let passed = 0;
   let countryHits = 0;
   let countryTotal = 0;
 
-  for (const [i, c] of CASES.entries()) {
-    const res = await col.query({
-      queryEmbeddings: [vectors[i]],
-      nResults: 5,
-      where: c.where,
-      include: ["metadatas", "distances"],
-    });
-    const rows = res.metadatas[0].map((m, j) => ({
-      doc: String(m?.doc_id),
-      section: Number(m?.section_no),
-      cc: String(m?.country_code),
-      dist: res.distances[0][j] ?? NaN,
-    }));
+  for (const c of CASES) {
+    const hits = await retriever.retrieve(c.query, 5, c.filter ? [c.filter] : []);
+    const rows = hits.map((h) => ({ doc: h.docId, section: h.sectionNo, cc: h.countryCode, dist: h.distance }));
 
     const top = rows.slice(0, c.within);
     const ok = top.some(
@@ -70,7 +55,7 @@ async function main(): Promise<void> {
       if (rows[0]?.cc === c.country) countryHits++;
     }
 
-    console.log(`${ok ? "PASS" : "FAIL"}  ${c.query}${c.where ? `  where=${JSON.stringify(c.where)}` : ""}`);
+    console.log(`${ok ? "PASS" : "FAIL"}  ${c.query}${c.filter ? `  filter=${c.filter}` : ""}`);
     for (const r of rows) console.log(`        ${r.doc}  s${String(r.section).padStart(2, "0")}  d=${r.dist.toFixed(4)}`);
   }
 

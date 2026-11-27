@@ -34,6 +34,7 @@ export interface Info {
 
 export async function fetchInfo(): Promise<Info> {
   const res = await fetch("/api/info");
+  if (res.status === 401) throw new UnauthorizedError();
   return res.json();
 }
 
@@ -51,6 +52,7 @@ export async function streamChat(req: ChatRequest, onEvent: (e: ChatEvent) => vo
     body: JSON.stringify(req),
     signal,
   });
+  if (res.status === 401) throw new UnauthorizedError();
   if (!res.ok || !res.body) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error ?? `Request failed (${res.status})`);
@@ -70,4 +72,48 @@ export async function streamChat(req: ChatRequest, onEvent: (e: ChatEvent) => vo
     }
   }
   if (buf.trim()) onEvent(JSON.parse(buf));
+}
+
+// ---------- auth ----------
+
+export interface User {
+  sub: string;
+  email: string;
+  name: string;
+  picture?: string;
+}
+
+/** Thrown when the session is missing or expired; the app goes back to the sign-in screen. */
+export class UnauthorizedError extends Error {
+  constructor() {
+    super("Your session has expired. Please sign in again.");
+  }
+}
+
+export async function fetchAuthConfig(): Promise<{ enabled: boolean; clientId: string | null }> {
+  const res = await fetch("/api/auth/config");
+  if (!res.ok) throw new Error(`Auth config failed (${res.status})`);
+  return res.json();
+}
+
+export async function fetchMe(): Promise<User | null> {
+  const res = await fetch("/api/auth/me");
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(`Session check failed (${res.status})`);
+  return (await res.json()).user;
+}
+
+export async function signInWithGoogle(credential: string): Promise<User> {
+  const res = await fetch("/api/auth/google", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ credential }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `Sign-in failed (${res.status})`);
+  return body.user;
+}
+
+export async function signOut(): Promise<void> {
+  await fetch("/api/auth/logout", { method: "POST" });
 }
