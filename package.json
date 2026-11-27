@@ -30,7 +30,7 @@
     "jszip": "^3.10.2",
     "mammoth": "^1.13.0",
     "node-html-parser": "^9.0.7",
-    "openai": "^7.57.0",
+    "openai": "^7.63.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "zod": "^4.6.7"
@@ -45,7 +45,7 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
-    "vitest": "^5.1.0"
+    "vitest": "^5.1.1"
   },
   "engines": {
     "node": "24.x"
