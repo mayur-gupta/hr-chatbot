@@ -146,6 +146,7 @@ export async function openSupabaseSearch(settings: Settings): Promise<SearchStor
   return {
     label: `${label(settings)} (dim ${meta.dim})`,
     dim: meta.dim,
+    queryPrefix: meta.query_prefix,
     search: async (vector, k, countryCode) => {
       const rows = await run<MatchRow[]>(
         db.rpc(MATCH_FN, { query_embedding: toVector(vector), match_count: k, filter_country: countryCode ?? null }),
@@ -172,6 +173,12 @@ export async function openSupabaseIngest(settings: Settings, dim: number, reset:
     throw new Error(
       `The Supabase index was built with "${meta.embed_model}" (dim ${meta.dim}), ` +
         `but the current model is "${settings.embedModel}" (dim ${dim}).\nRe-run with --reset to rebuild it.`,
+    );
+  } else if (meta && (meta.doc_prefix !== settings.docPrefix || meta.query_prefix !== settings.queryPrefix)) {
+    throw new Error(
+      `The Supabase index was built with DOC_PREFIX=${JSON.stringify(meta.doc_prefix)} and QUERY_PREFIX=${JSON.stringify(meta.query_prefix)}, ` +
+        `but they are now ${JSON.stringify(settings.docPrefix)} and ${JSON.stringify(settings.queryPrefix)}.\n` +
+        `Set them to match, or re-run with --reset to rebuild it.`,
     );
   }
   await run(

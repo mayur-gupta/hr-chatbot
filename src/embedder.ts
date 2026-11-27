@@ -9,9 +9,12 @@ const RETRYABLE = new Set([408, 409, 429, 500, 502, 503, 504]);
 export class Embedder {
   private client: OpenAI;
   dimension = 0;
+  /** Prepended to queries. The retriever replaces it with the prefix the stored vectors were built for. */
+  queryPrefix: string;
 
   constructor(private settings: Settings) {
     this.client = new OpenAI({ baseURL: settings.embed.baseUrl, apiKey: settings.embed.apiKey || "none", maxRetries: 0 });
+    this.queryPrefix = settings.queryPrefix;
   }
 
   /** Confirm the endpoint answers with the configured model, and learn the vector dimension. */
@@ -79,6 +82,6 @@ export class Embedder {
   }
 
   embedQueries(texts: string[]): Promise<number[][]> {
-    return this.embedChecked(texts.map((t) => this.settings.queryPrefix + t));
+    return this.embedChecked(texts.map((t) => this.queryPrefix + t));
   }
 }

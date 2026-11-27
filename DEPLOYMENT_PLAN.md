@@ -35,7 +35,7 @@ Running cost: **$0/month.** The trade-offs are rate limits, non-commercial use o
 | Deploy build | `npm run build:vercel` → `.vercel/output` (static UI + bundled function in `bom1`; the index is bundled only with `BUNDLE_INDEX=1`) |
 | CI/CD | [.github/workflows/pipeline.yml](.github/workflows/pipeline.yml), [retrieval-smoke.yml](.github/workflows/retrieval-smoke.yml), [dependabot.yml](.github/dependabot.yml), [scripts/smoke-deploy.mjs](scripts/smoke-deploy.mjs) |
 | Corpus | The 500 synthetic policy `.docx` files + `manifest.jsonl` in [corpus/](corpus) (9.2 MB, public with the repo; Kalvora is fictional). Default `CORPUS_DIR` |
-| Tests | 42 Vitest tests (parser on real policies from `corpus/`, chunker, auth, config, file index, Supabase store mapping, local file-index structure when present) + `npm run smoke` retrieval checks |
+| Tests | 43 Vitest tests (parser on real policies from `corpus/`, chunker, auth, config, file index, Supabase store mapping, local file-index structure when present) + `npm run smoke` retrieval checks |
 
 **Verified locally:**
 - The file index gives the same smoke results as Chroma on the real corpus: 11/11 checks, 100% top-1 country accuracy. Distances agree to about 0.0005, and the only ranking differences are near-ties.
@@ -153,6 +153,7 @@ What CI builds is exactly what runs, and Vercel never compiles anything.
 | C12 | Docs | `README.md`, `.env.example`, this file |
 | C13 | Supabase pgvector store (`VECTOR_STORE=supabase`, default on Vercel): schema migration, search function, incremental upserts, stale deletes, model check at start-up. The function region is set to `VERCEL_FUNCTION_REGION` (default `bom1`). The index is bundled only with `BUNDLE_INDEX=1`. `retrieval-smoke` now checks Supabase twice a week | `supabase/migrations/`, `src/supabaseStore.ts`, `src/vectorStore.ts`, `src/config.ts`, `scripts/build-vercel.mjs`, `.github/workflows/retrieval-smoke.yml`, `test/supabaseStore.test.ts` |
 | C14 | Vectors loaded on every production deploy (D7): corpus committed in `corpus/` (default `CORPUS_DIR`), `ingest --prune` (refused with `--country`/`--limit`, skipped if a document fails to parse), load + retrieval smoke before `vercel deploy`, and a manual *Run workflow* with `reset_vectors` for model changes | `corpus/`, `src/pipeline.ts`, `src/vectorStore.ts`, `src/supabaseStore.ts`, `src/fileIndex.ts`, `src/store.ts`, `.github/workflows/pipeline.yml` |
+| C15 | Query prefix taken from the store (Supabase meta, file index), not `QUERY_PREFIX`: an unset prefix on Vercel would otherwise fall back to nomic's `search_query: ` and quietly hurt retrieval. Supabase ingestion refuses a prefix change without `--reset` | `src/vectorStore.ts`, `src/supabaseStore.ts`, `src/embedder.ts`, `src/retriever.ts`, `test/fileIndex.test.ts` |
 
 ---
 
@@ -213,8 +214,8 @@ Google needs exact JavaScript origins; wildcards aren't allowed. So:
 | `CHAT_MODEL` | (auto) | Flash model id | same | Required for hosted endpoints |
 | `EMBED_MODEL` | LM Studio nomic | `gemini-embedding-001` | same | Must match the stored vectors (checked at start-up) |
 | `EMBED_DIMENSIONS` | empty | `768` | `768` | Must be 768: the Supabase column is `vector(768)` |
-| `DOC_PREFIX` / `QUERY_PREFIX` | nomic prefixes | `""` | `""` | |
-| `VECTOR_STORE` | `chroma` | (defaults to `supabase` on Vercel) | same | |
+| `DOC_PREFIX` / `QUERY_PREFIX` | `""` for Gemini (nomic needs its prefixes) | not set | not set | Queries use the prefix stored with the vectors in `kalvora_index_meta`, so Vercel needs neither (it can't hold an empty value anyway). Ingestion refuses to mix prefixes |
+| `VECTOR_STORE` | `supabase` (or `chroma`/`file`) | not set (defaults to `supabase` on Vercel) | same | |
 | `SUPABASE_URL` | for ingestion | `https://txkivrtpuiqphwvdanei.supabase.co` | same | One shared project is fine: previews only read |
 | `SUPABASE_SECRET_KEY` | for ingestion | `sb_secret_…` | same (or a separate secret key) | Sensitive. Supabase > Project Settings > API Keys |
 | `TOP_K` | 6 | 6 | 6 | |

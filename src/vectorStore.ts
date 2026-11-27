@@ -18,8 +18,13 @@ const supabase = () => import("./supabaseStore.js");
 export interface SearchStore {
   /** Human-readable location, for logs. */
   label: string;
-  /** Vector size the store expects, when known up front (file index). */
+  /** Vector size the store expects, when known up front (Supabase, file index). */
   dim?: number;
+  /**
+   * Query prefix the stored vectors were built for, when the store records it (Supabase, file
+   * index). It overrides QUERY_PREFIX, so the deployed app needs no prefix setting.
+   */
+  queryPrefix?: string;
   search(vector: number[], k: number, countryCode?: string): Promise<Hit[]>;
   count(): Promise<number>;
 }
@@ -52,6 +57,7 @@ export async function openSearchStore(settings: Settings): Promise<SearchStore> 
     return {
       label: `${settings.indexDir} (${index.size} chunks, dim ${index.meta.dim})`,
       dim: index.meta.dim,
+      queryPrefix: index.meta.queryPrefix,
       search: async (vector, k, cc) => index.search(vector, k, cc),
       count: async () => index.size,
     };
