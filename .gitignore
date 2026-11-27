@@ -7,3 +7,6 @@ web/dist/
 # Local data stays out of git, including data/index/: the deployed app reads its vectors from
 # Supabase. Build the file index locally when needed (VECTOR_STORE=file npm run ingest).
 data/
+
+# vercel link writes .env.local (a short-lived VERCEL_OIDC_TOKEN)
+.env*.local
