@@ -29,7 +29,11 @@ export interface IngestStore {
   label: string;
   existingHashes(ids: string[]): Promise<Map<string, string>>;
   upsert(chunks: Chunk[], vectors: number[][]): Promise<void>;
-  deleteStale(docIds: string[], keep: Set<string>): Promise<number>;
+  /**
+   * Delete chunks not in `keep`, among the given docs, or among all chunks with "all" (which also
+   * removes documents that left the corpus). Returns how many were removed.
+   */
+  deleteStale(docIds: string[] | "all", keep: Set<string>): Promise<number>;
   /** Persist pending writes (no-op for Chroma, which writes per upsert). */
   flush(): Promise<void>;
   count(): Promise<number>;

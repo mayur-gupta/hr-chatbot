@@ -28,6 +28,6 @@ jobs:
           EMBED_BASE_URL: ${{ vars.EMBED_BASE_URL }}
           EMBED_MODEL: ${{ vars.EMBED_MODEL }}
           EMBED_DIMENSIONS: ${{ vars.EMBED_DIMENSIONS }}
-          EMBED_API_KEY: ${{ secrets.SMOKE_EMBED_API_KEY }}
+          EMBED_API_KEY: ${{ secrets.EMBED_API_KEY }}
           DOC_PREFIX: ""
           QUERY_PREFIX: ""

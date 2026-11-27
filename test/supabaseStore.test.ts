@@ -56,6 +56,15 @@ describe("supabase store", () => {
     expect(staleIds(rows, ["A"], new Set(["A#1"]))).toEqual(["A#2"]);
   });
 
+  it("with 'all', also deletes chunks of docs that left the corpus", () => {
+    const rows = [
+      { id: "A#1", doc_id: "A", content_hash: "h" },
+      { id: "A#2", doc_id: "A", content_hash: "h" },
+      { id: "B#1", doc_id: "B", content_hash: "h" },
+    ];
+    expect(staleIds(rows, "all", new Set(["A#1"]))).toEqual(["A#2", "B#1"]);
+  });
+
   it("needs the URL and secret key", async () => {
     await expect(openSupabaseSearch(loadSettings({ VECTOR_STORE: "supabase" }))).rejects.toThrow(/SUPABASE_SECRET_KEY/);
   });

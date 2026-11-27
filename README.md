@@ -19,7 +19,7 @@ Then, each session:
    npm run smoke               # retrieval sanity checks + top-1 country accuracy
    ```
 
-Settings live in `.env` (copied from `.env.example`). If you use a model without task prefixes (bge, gte, MiniLM), set `DOC_PREFIX=""` and `QUERY_PREFIX=""`.
+Settings live in `.env` (copied from `.env.example`). If you use a model without task prefixes (bge, gte, MiniLM), set `DOC_PREFIX=""` and `QUERY_PREFIX=""`. The policy files are in [corpus/](corpus) (the default `CORPUS_DIR`).
 
 ## Commands
 
@@ -28,6 +28,7 @@ Settings live in `.env` (copied from `.env.example`). If you use a model without
 | `npm run ingest:dry` | Parse + chunk + write `data/chunks.jsonl`. Needs neither LM Studio nor Chroma |
 | `npm run ingest -- --country GB` | Ingest one country only (`--limit N` also works) |
 | `npm run ingest -- --reset` | Drop and rebuild the collection (required after changing `EMBED_MODEL`) |
+| `npm run ingest -- --prune` | Also delete chunks of policies removed from the corpus (what each production deploy runs) |
 | `npm run smoke` | Run the labelled retrieval checks |
 | `npm test` / `npm run typecheck` | Unit tests / type check |
 | `npm run chroma:docker` | Alternative to `npm run chroma` if Docker Desktop is running |
@@ -38,7 +39,7 @@ Settings live in `.env` (copied from `.env.example`). If you use a model without
 | `npm run models` | List the model ids the configured chat/embedding endpoints offer |
 | `VECTOR_STORE=file npm run ingest -- --reset` | Build the file index in `data/index` instead of Chroma (incremental re-runs work too) |
 | `npm run export-index` | Copy the Chroma collection into `data/index` without re-embedding |
-| `npm run build:vercel` | Build `.vercel/output` (UI + bundled API function + index) for `vercel deploy --prebuilt` |
+| `npm run build:vercel` | Build `.vercel/output` (UI + bundled API function) for `vercel deploy --prebuilt` |
 
 ## Chat UI
 
@@ -66,7 +67,9 @@ The deployed app needs no paid services:
 | Vectors | Supabase free tier: Postgres + pgvector (`kalvora-hr`, ap-south-1). HNSW cosine index, country filter in SQL, server-only access. Schema in [supabase/migrations](supabase/migrations) |
 | CI/CD | GitHub Actions ([.github/workflows](.github/workflows)) |
 
-To switch, set the Gemini variables shown in `.env.example`, plus `VECTOR_STORE=supabase`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (the `sb_secret_…` key). Then load the vectors with `npm run ingest -- --reset` and check them with `npm run smoke`. The query embeddings must come from the same model as the stored vectors, so vectors built with local nomic embeddings won't work with Gemini. The table is `vector(768)`, so keep `EMBED_DIMENSIONS=768`. Free Supabase projects pause after a week without use; the twice-weekly `retrieval-smoke` workflow keeps the project active, and a paused project can be restored from the dashboard.
+To switch, set the Gemini variables shown in `.env.example`, plus `VECTOR_STORE=supabase`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (the `sb_secret_…` key). Then load the vectors with `npm run ingest -- --reset` and check them with `npm run smoke`. The query embeddings must come from the same model as the stored vectors, so vectors built with local nomic embeddings won't work with Gemini. The table is `vector(768)`, so keep `EMBED_DIMENSIONS=768`.
+
+Every production deploy then keeps the vectors in sync with `corpus/`: before shipping the code, the pipeline runs `npm run ingest -- --prune` and `npm run smoke`. Unchanged chunks are skipped by content hash, so a deploy without policy changes makes no embedding calls. To change policies, edit `corpus/` (and its `manifest.jsonl`) in a PR and merge it. Previews read the production vectors and never write them. Free Supabase projects pause after a week without use; the twice-weekly `retrieval-smoke` workflow keeps the project active, and a paused project can be restored from the dashboard.
 
 `VECTOR_STORE=file` still works: it searches `data/index/` in memory with no database. To deploy that way, build with `BUNDLE_INDEX=1 npm run build:vercel` and set `VECTOR_STORE=file` on Vercel. Free-tier prompts may be used by Google to improve its products, which is fine for this fictional corpus but not for real employee data. The full rollout is in [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md).
 
@@ -92,5 +95,6 @@ src/vectorStore.ts  Supabase, Chroma or file index
 src/supabaseStore.ts  Supabase pgvector     web/             React + Vite chat UI
 scripts/          Chroma launcher, build-vercel.mjs, smoke-deploy.mjs
 supabase/migrations/  pgvector schema + search function
+corpus/           the 500 policy .docx files + manifest.jsonl (synthetic)
 data/index/       file vector index (VECTOR_STORE=file)
 ```

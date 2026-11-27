@@ -1,12 +1,13 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { isLocal, loadSettings } from "../src/config.js";
+import { isLocal, loadSettings, PROJECT_ROOT } from "../src/config.js";
 
 describe("loadSettings", () => {
-  it("defaults chat and embeddings to LM Studio, and needs no corpus", () => {
+  it("defaults chat and embeddings to LM Studio, and the corpus to corpus/ in the repo", () => {
     const s = loadSettings({});
     expect(s.chat).toEqual({ baseUrl: "http://localhost:1234/v1", apiKey: "lm-studio" });
     expect(s.embed).toEqual(s.chat);
-    expect(s.corpusDir).toBe("");
+    expect(s.corpusDir).toBe(path.join(PROJECT_ROOT, "corpus"));
     expect(s.vectorStore).toBe("chroma");
     expect(isLocal(s.chat)).toBe(true);
   });

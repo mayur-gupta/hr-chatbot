@@ -1,2 +1,4 @@
 data/index/vectors.bin binary
 data/index/index.json -diff linguist-generated
+# The policy corpus is data: keep it byte-for-byte (no line-ending conversion).
+corpus/** -text

@@ -87,6 +87,8 @@ describe("FileIndex", () => {
     expect(index.hashes().get("A::s01")).toBe("h2");
     expect(index.deleteStale(["A"], new Set(["A::s01"]))).toBe(1);
     expect([...index.hashes().keys()].sort()).toEqual(["A::s01", "B::s01"]);
+    expect(index.deleteStale("all", new Set(["A::s01"]))).toBe(1); // B left the corpus
+    expect([...index.hashes().keys()]).toEqual(["A::s01"]);
   });
 
   it("round-trips through save/load", () => {

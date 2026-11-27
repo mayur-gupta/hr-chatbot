@@ -17,21 +17,26 @@ interface Options {
   limit?: number;
   dryRun: boolean;
   reset: boolean;
+  prune: boolean;
 }
 
 const program = new Command()
   .name("ingest")
-  .description("Ingest the Kalvora HR policy corpus into the vector store (Chroma or the file index)")
+  .description("Ingest the Kalvora HR policy corpus into the vector store (Supabase, Chroma or the file index)")
   .option("-c, --country <code>", "only ingest one country code (e.g. GB, IN)")
   .option("-l, --limit <n>", "only ingest the first N documents", (v) => parseInt(v, 10))
   .option("--dry-run", "parse + chunk + write data/chunks.jsonl; no embedding or DB writes", false)
-  .option("--reset", "drop and rebuild the collection / index", false);
+  .option("--reset", "drop and rebuild the collection / index", false)
+  .option("--prune", "also delete chunks of documents that are no longer in the corpus (full runs only)", false);
 
 async function main(): Promise<void> {
   const opts = program.parse().opts<Options>();
   const settings = loadSettings();
   const t0 = Date.now();
   if (!settings.corpusDir) throw new Error("CORPUS_DIR is required for ingestion (see .env.example)");
+  if (opts.prune && (opts.country || opts.limit)) {
+    throw new Error("--prune syncs the store to the whole corpus, so it can't be combined with --country or --limit");
+  }
 
   // 1. Discover
   const { records: all, warnings } = loadManifest(settings.corpusDir);
@@ -103,7 +108,10 @@ async function main(): Promise<void> {
   }
 
   const keep = new Set(chunks.map((c) => c.id));
-  const removed = await store.deleteStale([...docChunkIds.keys()], keep);
+  // A doc that failed to parse has no chunks in `keep`; pruning would delete its existing vectors.
+  const prune = opts.prune && !failures.length;
+  if (opts.prune && !prune) console.warn(`WARN --prune skipped: ${failures.length} documents failed to parse`);
+  const removed = await store.deleteStale(prune ? "all" : [...docChunkIds.keys()], keep);
   await store.flush();
   console.log(`Stale chunks deleted: ${removed}`);
   console.log(`${store.label} now holds ${await store.count()} chunks`);

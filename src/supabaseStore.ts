@@ -80,10 +80,10 @@ export function chunkRow(c: Chunk, vector: number[]) {
   };
 }
 
-/** Ids of chunks that belong to the re-ingested docs but are no longer produced. */
-export function staleIds(rows: ListedRow[], docIds: string[], keep: Set<string>): string[] {
-  const docs = new Set(docIds);
-  return rows.filter((r) => docs.has(r.doc_id) && !keep.has(r.id)).map((r) => r.id);
+/** Ids of chunks that belong to the re-ingested docs (or to any doc, with "all") but are no longer produced. */
+export function staleIds(rows: ListedRow[], docIds: string[] | "all", keep: Set<string>): string[] {
+  const docs = docIds === "all" ? null : new Set(docIds);
+  return rows.filter((r) => (!docs || docs.has(r.doc_id)) && !keep.has(r.id)).map((r) => r.id);
 }
 
 function connect(settings: Settings): SupabaseClient {
