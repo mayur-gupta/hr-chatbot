@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
-import { fetchInfo, streamChat, type ChatState, type Info, type Source } from "./api";
+import { UnauthorizedError, fetchInfo, streamChat, type ChatState, type Info, type Source, type User } from "./api";
 import { Markdown } from "./Markdown";
 
 interface Message {
@@ -36,7 +36,14 @@ const emptyState = (): ChatState => ({ history: [], lastCountries: [], lastQuest
 
 let nextId = 1;
 
-export function App() {
+interface AppProps {
+  user: User;
+  /** Undefined when sign-in is disabled (local development). */
+  onSignOut?: () => void;
+  onSessionExpired: () => void;
+}
+
+export function App({ user, onSignOut, onSessionExpired }: AppProps) {
   const [info, setInfo] = useState<Info | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [state, setState] = useState<ChatState>(emptyState);
@@ -50,8 +57,11 @@ export function App() {
   useEffect(() => {
     fetchInfo()
       .then(setInfo)
-      .catch(() => setInfo({ ok: false, error: "Can't reach the API server. Start it with `npm run server`.", countries: [] }));
-  }, []);
+      .catch((err) => {
+        if (err instanceof UnauthorizedError) return onSessionExpired();
+        setInfo({ ok: false, error: "Can't reach the API server. Start it with `npm run server`.", countries: [] });
+      });
+  }, [onSessionExpired]);
 
   // Keep the newest message in view while streaming, unless the user scrolled up.
   useEffect(() => {
@@ -93,6 +103,10 @@ export function App() {
         ctrl.signal,
       );
     } catch (err) {
+      if (err instanceof UnauthorizedError) {
+        onSessionExpired();
+        return;
+      }
       const aborted = (err as Error).name === "AbortError";
       patch(botId, (m) => ({ ...m, pending: false, error: aborted ? undefined : (err as Error).message, content: m.content + (aborted ? "\n\n*(stopped)*" : "") }));
     } finally {
@@ -140,9 +154,12 @@ export function App() {
             </p>
           </div>
         </div>
-        <button className="ghost" onClick={newChat} disabled={!messages.length}>
-          New chat
-        </button>
+        <div className="top-actions">
+          <button className="ghost" onClick={newChat} disabled={!messages.length}>
+            New chat
+          </button>
+          <UserMenu user={user} onSignOut={onSignOut} />
+        </div>
       </header>
 
       {info && !info.ok && <div className="banner">{info.error}</div>}
@@ -200,6 +217,58 @@ export function App() {
         )}
       </form>
       <p className="hint">Enter to send · Shift+Enter for a new line · follow-ups like “and in Germany?” keep context</p>
+    </div>
+  );
+}
+
+function UserMenu({ user, onSignOut }: { user: User; onSignOut?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const [imgOk, setImgOk] = useState(true);
+  const initials = user.name
+    .split(/\s+/)
+    .map((p) => p[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
+  useEffect(() => {
+    if (!open) return;
+    const close = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement).closest(".user-menu")) setOpen(false);
+    };
+    const esc = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setOpen(false);
+    document.addEventListener("click", close);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("click", close);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [open]);
+
+  return (
+    <div className="user-menu">
+      <button className="avatar" onClick={() => setOpen((o) => !o)} aria-haspopup="menu" aria-expanded={open} title={user.email}>
+        {user.picture && imgOk ? (
+          <img src={user.picture} alt="" referrerPolicy="no-referrer" onError={() => setImgOk(false)} />
+        ) : (
+          <span>{initials || "?"}</span>
+        )}
+      </button>
+      {open && (
+        <div className="menu" role="menu">
+          <div className="menu-user">
+            <strong>{user.name}</strong>
+            <span>{user.email}</span>
+          </div>
+          {onSignOut ? (
+            <button role="menuitem" className="menu-item" onClick={onSignOut}>
+              Sign out
+            </button>
+          ) : (
+            <div className="menu-note">Sign-in is off (no GOOGLE_CLIENT_ID)</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

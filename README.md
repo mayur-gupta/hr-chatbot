@@ -1,6 +1,6 @@
 # Kalvora HR Policies: RAG Ingestion
 
-TypeScript pipeline that parses the 500 Kalvora HR policy `.docx` files, splits them into section-level chunks, embeds them with **LM Studio**, and stores them in **ChromaDB**. The design is described in [PLAN.md](PLAN.md).
+TypeScript RAG app over the 500 Kalvora HR policy `.docx` files. It splits them into section-level chunks, embeds them, and stores them in **ChromaDB** (local), **Supabase pgvector** (deployed) or a **file index** (no database). A React chat UI with Google sign-in sits on top. Models come from **LM Studio** locally or any OpenAI-compatible provider, such as the free Gemini API tier. The design is in [PLAN.md](PLAN.md), and deployment is in [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md).
 
 ## Quick start
 
@@ -35,10 +35,40 @@ Settings live in `.env` (copied from `.env.example`). If you use a model without
 | `npm run server` | Chat API on http://localhost:3001 (also serves the built UI) |
 | `npm run web` | React chat UI dev server on http://localhost:5173 (proxies `/api` to the server) |
 | `npm run build:web` | Build the UI into `web/dist`, served by `npm run server` |
+| `npm run models` | List the model ids the configured chat/embedding endpoints offer |
+| `VECTOR_STORE=file npm run ingest -- --reset` | Build the file index in `data/index` instead of Chroma (incremental re-runs work too) |
+| `npm run export-index` | Copy the Chroma collection into `data/index` without re-embedding |
+| `npm run build:vercel` | Build `.vercel/output` (UI + bundled API function + index) for `vercel deploy --prebuilt` |
 
 ## Chat UI
 
 Start Chroma and LM Studio, then run `npm run server` and `npm run web` in two terminals and open http://localhost:5173. The UI streams answers, shows each citation as a chip that opens its source excerpt, lets you pin the search to specific countries, and keeps short follow-ups ("and in Germany?") in context. Conversation state lives in the browser, so the server is stateless.
+
+### Google sign-in
+
+The UI and every `/api` route except `/api/auth/*` require a Google account once `GOOGLE_CLIENT_ID` is set. Without it, sign-in is off and the server prints a warning (fine on localhost, refused on Vercel / `NODE_ENV=production`).
+
+1. In [Google Cloud Console → Credentials](https://console.cloud.google.com/apis/credentials), create an **OAuth client ID** of type **Web application** (set up the OAuth consent screen first if asked).
+2. Under **Authorized JavaScript origins** add `http://localhost`, `http://localhost:5173`, `http://localhost:3001`, and later your production URL. No redirect URIs are needed (popup flow).
+3. In `.env` set `GOOGLE_CLIENT_ID`, and `SESSION_SECRET` to 32+ random characters (`openssl rand -hex 32`).
+4. Optionally restrict who can sign in with `ALLOWED_DOMAINS=kalvora.com` and/or `ALLOWED_EMAILS=a@x.com,b@y.com`.
+
+How it works: Google Identity Services gives the browser an ID token, `POST /api/auth/google` verifies it (signature, audience, verified email, allowlist), and the server sets its own HMAC-signed `HttpOnly; SameSite=Lax` session cookie (7 days by default). No session store is needed.
+
+## Free hosted setup
+
+The deployed app needs no paid services:
+
+| Piece | Service |
+|---|---|
+| Hosting | Vercel Hobby (free, non-commercial use only), function in `bom1` (Mumbai) |
+| Chat + embeddings | Gemini API free tier, through its OpenAI-compatible endpoint |
+| Vectors | Supabase free tier: Postgres + pgvector (`kalvora-hr`, ap-south-1). HNSW cosine index, country filter in SQL, server-only access. Schema in [supabase/migrations](supabase/migrations) |
+| CI/CD | GitHub Actions ([.github/workflows](.github/workflows)) |
+
+To switch, set the Gemini variables shown in `.env.example`, plus `VECTOR_STORE=supabase`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (the `sb_secret_…` key). Then load the vectors with `npm run ingest -- --reset` and check them with `npm run smoke`. The query embeddings must come from the same model as the stored vectors, so vectors built with local nomic embeddings won't work with Gemini. The table is `vector(768)`, so keep `EMBED_DIMENSIONS=768`. Free Supabase projects pause after a week without use; the twice-weekly `retrieval-smoke` workflow keeps the project active, and a paused project can be restored from the dashboard.
+
+`VECTOR_STORE=file` still works: it searches `data/index/` in memory with no database. To deploy that way, build with `BUNDLE_INDEX=1 npm run build:vercel` and set `VECTOR_STORE=file` on Vercel. Free-tier prompts may be used by Google to improve its products, which is fine for this fictional corpus but not for real employee data. The full rollout is in [DEPLOYMENT_PLAN.md](DEPLOYMENT_PLAN.md).
 
 ## What gets stored
 
@@ -56,6 +86,11 @@ src/parser.ts     docx → blocks (mammoth)   src/pipeline.ts  CLI
 src/chunker.ts    section chunks + header   src/smoke.ts     retrieval checks
 src/retriever.ts  query + country filter    src/answer.ts    grounded answer (LM Studio)
 src/chat.ts       follow-up/country logic   src/ask.ts       terminal chat
-src/server.ts     HTTP API (NDJSON stream)  web/             React + Vite chat UI
-scripts/          Chroma server launcher / setup
+src/app.ts        HTTP API handler          src/server.ts    local server (API + built UI)
+src/auth.ts       Google sign-in + session  src/fileIndex.ts in-memory vector index (int8)
+src/vectorStore.ts  Supabase, Chroma or file index
+src/supabaseStore.ts  Supabase pgvector     web/             React + Vite chat UI
+scripts/          Chroma launcher, build-vercel.mjs, smoke-deploy.mjs
+supabase/migrations/  pgvector schema + search function
+data/index/       file vector index (VECTOR_STORE=file)
 ```

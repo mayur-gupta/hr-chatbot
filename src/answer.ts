@@ -1,6 +1,6 @@
-/** Generation side of the RAG: build a grounded prompt and stream an answer from an LM Studio chat model. */
+/** Generation side of the RAG: build a grounded prompt and stream an answer from an OpenAI-compatible chat model. */
 import OpenAI from "openai";
-import type { Settings } from "./config.js";
+import { isLocal, type Settings } from "./config.js";
 import type { Hit } from "./retriever.js";
 
 export type Turn = { role: "user" | "assistant"; content: string };
@@ -30,19 +30,29 @@ export class Answerer {
   model = "";
 
   constructor(private settings: Settings) {
-    this.client = new OpenAI({ baseURL: settings.lmstudioBaseUrl, apiKey: settings.lmstudioApiKey, maxRetries: 1 });
+    this.client = new OpenAI({ baseURL: settings.chat.baseUrl, apiKey: settings.chat.apiKey || "none", maxRetries: 1 });
   }
 
-  /** Pick the chat model: CHAT_MODEL if set (must exist), otherwise the first non-embedding model LM Studio lists. */
+  /**
+   * Pick the chat model. A hosted provider needs CHAT_MODEL and is trusted as-is (no extra
+   * request on every cold start). LM Studio: CHAT_MODEL is checked against the loaded models,
+   * or the first non-embedding model is used.
+   */
   async init(override?: string): Promise<string> {
     const wanted = (override ?? this.settings.chatModel).trim();
+    if (!isLocal(this.settings.chat)) {
+      if (!wanted) throw new Error(`CHAT_MODEL is required for ${this.settings.chat.baseUrl}. List the options with: npm run models`);
+      return (this.model = wanted);
+    }
     const ids = (await this.client.models.list()).data.map((m) => m.id);
     const chatIds = ids.filter((id) => !/embed/i.test(id));
     if (wanted) {
       if (!ids.includes(wanted)) {
         throw new Error(
-          `Chat model "${wanted}" is not available in LM Studio.\n` +
-            `Available chat models: ${chatIds.join(", ") || "(none)"}\n` +
+          `Chat model "${wanted}" is not available in LM Studio.
+` +
+            `Available chat models: ${chatIds.join(", ") || "(none)"}
+` +
             `Load it in LM Studio, or change CHAT_MODEL in .env.`,
         );
       }
@@ -50,7 +60,8 @@ export class Answerer {
     } else {
       if (!chatIds.length) {
         throw new Error(
-          `No chat model is available in LM Studio (only: ${ids.join(", ") || "nothing"}).\n` +
+          `No chat model is available in LM Studio (only: ${ids.join(", ") || "nothing"}).
+` +
             `Download and load a chat model (e.g. Qwen or Llama) in LM Studio, or set CHAT_MODEL in .env.`,
         );
       }

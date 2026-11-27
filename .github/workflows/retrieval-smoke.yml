@@ -1,0 +1,33 @@
+name: Retrieval smoke
+
+# Checks the Supabase vector store against the hosted embedding model: catches a provider
+# changing the model behind the same name, or a bad re-ingest. Calls embeddings only (~11
+# requests) and Supabase, never the chat model. Running twice a week also counts as activity,
+# so the free Supabase project isn't paused for a week without use.
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1,4" # Mondays and Thursdays 06:00 UTC
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run smoke
+        env:
+          VECTOR_STORE: supabase
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          EMBED_BASE_URL: ${{ vars.EMBED_BASE_URL }}
+          EMBED_MODEL: ${{ vars.EMBED_MODEL }}
+          EMBED_DIMENSIONS: ${{ vars.EMBED_DIMENSIONS }}
+          EMBED_API_KEY: ${{ secrets.SMOKE_EMBED_API_KEY }}
+          DOC_PREFIX: ""
+          QUERY_PREFIX: ""

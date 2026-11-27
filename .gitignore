@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .env
-data/
+.vercel/
 .chroma-venv/
 web/dist/
+# Local data stays out of git, including data/index/: the deployed app reads its vectors from
+# Supabase. Build the file index locally when needed (VECTOR_STORE=file npm run ingest).
+data/
