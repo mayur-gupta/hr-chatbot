@@ -29,6 +29,7 @@ Settings live in `.env` (copied from `.env.example`). If you use a model without
 | `npm run ingest -- --country GB` | Ingest one country only (`--limit N` also works) |
 | `npm run ingest -- --reset` | Drop and rebuild the collection (required after changing `EMBED_MODEL`) |
 | `npm run ingest -- --prune` | Also delete chunks of policies removed from the corpus (what each production deploy runs) |
+| `npm run ingest -- --max-embed 950` | Embed at most 950 chunks this run and leave the rest for the next (Gemini free tier: 1,000 embeddings a day) |
 | `npm run smoke` | Run the labelled retrieval checks |
 | `npm test` / `npm run typecheck` | Unit tests / type check |
 | `npm run chroma:docker` | Alternative to `npm run chroma` if Docker Desktop is running |
@@ -67,7 +68,7 @@ The deployed app needs no paid services:
 | Vectors | Supabase free tier: Postgres + pgvector (`kalvora-hr`, ap-south-1). HNSW cosine index, country filter in SQL, server-only access. Schema in [supabase/migrations](supabase/migrations) |
 | CI/CD | GitHub Actions ([.github/workflows](.github/workflows)) |
 
-To switch, set the Gemini variables shown in `.env.example`, plus `VECTOR_STORE=supabase`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (the `sb_secret_…` key). Then load the vectors with `npm run ingest -- --reset` and check them with `npm run smoke`. The query embeddings must come from the same model as the stored vectors, so vectors built with local nomic embeddings won't work with Gemini. The table is `vector(768)`, so keep `EMBED_DIMENSIONS=768`.
+To switch, set the Gemini variables shown in `.env.example`, plus `VECTOR_STORE=supabase`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY` (the `sb_secret_…` key). Then load the vectors and check them with `npm run smoke`. The Gemini free tier embeds only 1,000 chunks a day, so the first load of 7,500 takes about 8 daily runs of `npm run ingest -- --prune --max-embed 950` (see DEPLOYMENT_PLAN §9). The query embeddings must come from the same model as the stored vectors, so vectors built with local nomic embeddings won't work with Gemini. The table is `vector(768)`, so keep `EMBED_DIMENSIONS=768`.
 
 Every production deploy then keeps the vectors in sync with `corpus/`: before shipping the code, the pipeline runs `npm run ingest -- --prune` and `npm run smoke`. Unchanged chunks are skipped by content hash, so a deploy without policy changes makes no embedding calls. To change policies, edit `corpus/` (and its `manifest.jsonl`) in a PR and merge it. Previews read the production vectors and never write them. Free Supabase projects pause after a week without use; the twice-weekly `retrieval-smoke` workflow keeps the project active, and a paused project can be restored from the dashboard.
 

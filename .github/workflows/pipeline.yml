@@ -100,8 +100,11 @@ jobs:
           DOC_PREFIX: ""
           QUERY_PREFIX: ""
           RESET_VECTORS: ${{ inputs.reset_vectors }}
+        # Gemini's free tier allows 1,000 embeddings a day per project (each chunk counts), shared
+        # with the live app's questions. --max-embed keeps a deploy from using them all; whatever is
+        # left is embedded by the next run.
         run: |
-          flags="--prune"
+          flags="--prune --max-embed 950"
           if [ "$RESET_VECTORS" = "true" ]; then flags="$flags --reset"; fi
           npm run ingest -- $flags
           npm run smoke

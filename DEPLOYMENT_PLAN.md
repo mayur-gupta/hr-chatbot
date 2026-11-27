@@ -43,7 +43,7 @@ Running cost: **$0/month.** The trade-offs are rate limits, non-commercial use o
 
 - The Supabase search function, run as `service_role` on test rows: exact match at distance 0, and the country filter returns only that country. `anon` has no access to the tables or the function.
 
-**Not yet done:** the Supabase tables are empty. Do the first load from a developer machine (§9) so the first deploy has nothing left to embed. The first production deploy would also load it, but a full load can run into the daily free quota (§13).
+**In progress:** the first load into Supabase (§9). 960 of 7,500 chunks were loaded on 2026-11-27. The free tier allows 1,000 embeddings a day, so it finishes in about 7 more daily runs (around 2026-12-04). Deploy to production after that, so the first deploy has nothing left to embed.
 
 ---
 
@@ -51,8 +51,8 @@ Running cost: **$0/month.** The trade-offs are rate limits, non-commercial use o
 
 | # | Decision | Choice | Alternatives | Why |
 |---|---|---|---|---|
-| D1 | Chat LLM | **Gemini API free tier**, a Flash-class model (pick the id with `npm run models`) | Groq free tier (also OpenAI-compatible); OpenRouter free models | Free, fast, OpenAI-compatible: only `.env` changes. Same key as D2 |
-| D2 | Embeddings | **`gemini-embedding-001` at 768 dimensions**, no task prefixes | Keep local nomic (no free host) | Free on the same key. Requires a one-time re-embed of the corpus (~118 batches of 64 chunks) |
+| D1 | Chat LLM | **Gemini API free tier, `gemini-3.5-flash-lite`** (chosen 2026-11-27: first token in ~1 s on a cited test answer; `gemini-3.5-flash` took 4–24 s with its default thinking, and the 3.7/3.8 Flash models returned 503 "high demand") | Groq free tier (also OpenAI-compatible); OpenRouter free models | Free, fast, OpenAI-compatible: only `.env` changes. Same key as D2 |
+| D2 | Embeddings | **`gemini-embedding-001` at 768 dimensions**, no task prefixes | Keep local nomic (no free host) | Free on the same key. Requires a one-time re-embed of the corpus: about 8 days on the free tier, which allows 1,000 embeddings a day (§9) |
 | D3 | Vector store | **Supabase pgvector, free tier** (`kalvora-hr`, ap-south-1). HNSW cosine index; `match_kalvora_chunks()` does top-k with an optional country filter (iterative scan, so filtered searches still return k rows). RLS on with no policies; only the server's secret key can read | File index in the repo (still available as `VECTOR_STORE=file`); Chroma Cloud (credits, then paid) | A real database for $0. Float vectors (~23 MB), text and the HNSW index come to well under 100 MB of the 500 MB free tier. Re-ingesting no longer means committing 13 MB, and the function bundle drops from ~17 MB to 3.5 MB. Cost: one network hop per query (kept short by `bom1`), and free projects pause after a week without use (§13) |
 | D4 | Vercel plan | **Hobby** | Pro (~$20/month) | Free. **Hobby is for non-commercial use only.** Use by a real company means Pro (and D1 moves to a paid, no-training tier) |
 | D5 | Who can sign in | **`ALLOWED_EMAILS=<your accounts>`** (or `ALLOWED_DOMAINS`) | Any Google account | Otherwise anyone with a Google account can use up the free model quota |
@@ -154,6 +154,7 @@ What CI builds is exactly what runs, and Vercel never compiles anything.
 | C13 | Supabase pgvector store (`VECTOR_STORE=supabase`, default on Vercel): schema migration, search function, incremental upserts, stale deletes, model check at start-up. The function region is set to `VERCEL_FUNCTION_REGION` (default `bom1`). The index is bundled only with `BUNDLE_INDEX=1`. `retrieval-smoke` now checks Supabase twice a week | `supabase/migrations/`, `src/supabaseStore.ts`, `src/vectorStore.ts`, `src/config.ts`, `scripts/build-vercel.mjs`, `.github/workflows/retrieval-smoke.yml`, `test/supabaseStore.test.ts` |
 | C14 | Vectors loaded on every production deploy (D7): corpus committed in `corpus/` (default `CORPUS_DIR`), `ingest --prune` (refused with `--country`/`--limit`, skipped if a document fails to parse), load + retrieval smoke before `vercel deploy`, and a manual *Run workflow* with `reset_vectors` for model changes | `corpus/`, `src/pipeline.ts`, `src/vectorStore.ts`, `src/supabaseStore.ts`, `src/fileIndex.ts`, `src/store.ts`, `.github/workflows/pipeline.yml` |
 | C15 | Query prefix taken from the store (Supabase meta, file index), not `QUERY_PREFIX`: an unset prefix on Vercel would otherwise fall back to nomic's `search_query: ` and quietly hurt retrieval. Supabase ingestion refuses a prefix change without `--reset` | `src/vectorStore.ts`, `src/supabaseStore.ts`, `src/embedder.ts`, `src/retriever.ts`, `test/fileIndex.test.ts` |
+| C16 | `ingest --max-embed N` embeds at most N chunks per run, leaving the rest for the next. The production load uses 950, so a deploy never uses up the free tier's 1,000 embeddings a day, which the live app needs for questions | `src/pipeline.ts`, `.github/workflows/pipeline.yml` |
 
 ---
 
@@ -211,7 +212,7 @@ Google needs exact JavaScript origins; wildcards aren't allowed. So:
 |---|---|---|---|---|
 | `CHAT_BASE_URL` / `EMBED_BASE_URL` | empty (LM Studio) | `https://generativelanguage.googleapis.com/v1beta/openai/` | same | |
 | `CHAT_API_KEY` / `EMBED_API_KEY` | empty | Gemini key (preview) | Gemini key (prod) | Sensitive |
-| `CHAT_MODEL` | (auto) | Flash model id | same | Required for hosted endpoints |
+| `CHAT_MODEL` | `gemini-3.5-flash-lite` | `gemini-3.5-flash-lite` | same | Required for hosted endpoints (D1) |
 | `EMBED_MODEL` | LM Studio nomic | `gemini-embedding-001` | same | Must match the stored vectors (checked at start-up) |
 | `EMBED_DIMENSIONS` | empty | `768` | `768` | Must be 768: the Supabase column is `vector(768)` |
 | `DOC_PREFIX` / `QUERY_PREFIX` | `""` for Gemini (nomic needs its prefixes) | not set | not set | Queries use the prefix stored with the vectors in `kalvora_index_meta`, so Vercel needs neither (it can't hold an empty value anyway). Ingestion refuses to mix prefixes |
@@ -229,18 +230,18 @@ Google needs exact JavaScript origins; wildcards aren't allowed. So:
 
 ## 9. Runbook: loading Supabase with Gemini embeddings
 
-**First load (once, from a developer machine).** The deploy pipeline could do it, but a full load is ~118 embedding batches and may hit the daily free quota, which would fail the deploy. Locally you can watch it and resume.
+**First load (from a developer machine, over about 8 days).** The Gemini free tier allows **1,000 embedding requests per day per project, and each chunk counts as one** (batching doesn't help). Verified 2026-11-27: the first run stopped at 960 chunks with `embed_content_free_tier_requests, limit: 1000`. The quota resets at midnight Pacific time (13:30 IST) and is shared with the live app's question embeddings and the smoke checks. So the 7,500 chunks load in daily runs of at most 950, leaving ~50 requests for checks and test questions. Paid tier instead: about $0.20 for the whole corpus at $0.15 per 1M tokens, but it needs a billing account with $5 minimum prepaid credit.
 
 1. In `.env`, set the Gemini variables (see `.env.example`), `EMBED_DIMENSIONS=768`, `VECTOR_STORE=supabase`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY`. Use `EMBED_DELAY_MS=1000` or more to stay under the per-minute limit. Leave `CORPUS_DIR` unset so it uses `corpus/`, the same files CI loads.
 2. `npm run models`: confirm the key works and pick `CHAT_MODEL`.
 3. `npm run ingest:dry`: expect 7,500 chunks.
-4. `npm run ingest -- --reset`: embeds about 118 batches and upserts each one to Supabase as it goes. If the daily quota runs out, re-run without `--reset` the next day; only missing chunks are embedded.
-5. `npm run smoke`: all labelled checks must pass. If the country accuracy drops, try `TOP_K=8` or check `EMBED_DIMENSIONS`.
+4. Once a day, after the quota resets: `npm run ingest -- --prune --max-embed 950`. Each run embeds up to 950 missing chunks and upserts them batch by batch, and says how many are left. Repeat until it reports `To embed: 0`. Use `--reset` only to wipe and start over.
+5. When all 7,500 are loaded, `npm run smoke`: all labelled checks must pass (it fails on a partial load, since some countries' policies are still missing). If the country accuracy drops, try `TOP_K=8` or check `EMBED_DIMENSIONS`.
 6. Open a PR. The preview smoke test exercises Supabase end to end.
 
 **Policy changes (automatic).** Add, edit or delete files in `corpus/` and update `corpus/manifest.jsonl` to match. Open a PR (the preview still reads the current vectors) and merge it. The production deploy re-embeds the changed sections, deletes removed ones, runs the retrieval smoke, then ships.
 
-**Embedding model change.** Change `EMBED_MODEL`/`EMBED_DIMENSIONS` in the repo variables and in Vercel, then run the Pipeline workflow on `main` with **reset_vectors** ticked. Search returns nothing while it rebuilds (minutes), so do it at a quiet time or from a developer machine with `--reset`. Without the reset, the load refuses to mix models.
+**Embedding model change.** Change `EMBED_MODEL`/`EMBED_DIMENSIONS` in the repo variables and in Vercel, then run the Pipeline workflow on `main` with **reset_vectors** ticked. On the free tier a rebuild takes about 8 days of daily runs (950 per run), and search is incomplete until it finishes, so plan it or use the paid tier for the rebuild. Without the reset, the load refuses to mix models.
 
 New Supabase project: apply [supabase/migrations](supabase/migrations) first (SQL editor or `supabase db push`).
 
@@ -296,7 +297,7 @@ New Supabase project: apply [supabase/migrations](supabase/migrations) first (SQ
 | Free-tier rate limits hit with several users | Medium | Answers fail for a minute | Friendly message (FR-9), allowlist, separate preview/prod keys. Groq as a drop-in alternative |
 | Google changes free-tier limits, model names or data terms | Medium | Medium | Everything is configured through environment variables. `retrieval-smoke` runs twice a week. Re-check terms (SEC-7) |
 | Gemini retrieval quality differs from nomic | Low–Medium | Medium | `npm run smoke` gates the rollout (§9 step 5) |
-| Re-embed blocked by the daily quota | Medium | Ingestion takes 2 days; a deploy that needs a large re-embed fails until it completes | Incremental ingestion, upserted per batch, so each run resumes (§9 step 4). Do first loads and resets from a developer machine |
+| Free-tier embedding quota (1,000 a day, each chunk counts) | Certain | A full load or rebuild takes about 8 days; search is incomplete meanwhile, and the production smoke check fails until it completes | Incremental ingestion, upserted per batch, so each run resumes. `--max-embed 950` leaves headroom for the app and checks (§9). Paid tier finishes it for about $0.20 |
 | A PR's policy edits aren't in its preview | Certain | Preview answers use the current policies | By design: previews share the production database and never write to it. Check the dry-run chunk counts in review; the edits go live on merge |
 | A broken `corpus/` change (e.g. an unparsable file) | Low | Deploy stops | Parse failures fail the load and `--prune` is skipped, so no vectors are lost. `verify` parses real policies in tests |
 | Supabase free project paused after a week without use | Medium (quiet weeks) | All answers fail until it's restored | `retrieval-smoke` queries it Mon + Thu. If paused, restore it in the dashboard (takes a few minutes). The error message names the cause. Supabase Pro ($25/month) never pauses |
@@ -309,7 +310,7 @@ New Supabase project: apply [supabase/migrations](supabase/migrations) first (SQ
 
 ## 14. Still to verify on the first deploy
 
-- **Gemini model ids and limits.** Check the model ids and current free-tier limits in AI Studio. The docs page doesn't list free-tier numbers, and names change often.
+- **Gemini model ids and limits.** Partly verified on 2026-11-27: `gemini-embedding-001` is limited to 1,000 requests a day on the free tier (each chunk counts), and `gemini-3.5-flash-lite` answers. Check the chat model's daily limit in AI Studio (https://ai.dev/rate-limit) before inviting users.
 - **Gemini embedding dimensions.** Check that `dimensions` (768) is honoured through the OpenAI-compatible endpoint. Ingestion refuses anything but 768, because the Supabase column is `vector(768)`. If the endpoint ignores it, change the column size in a new migration and in `SCHEMA_DIM` (HNSW supports up to 2,000 dimensions).
 - **Function region.** Check that the `regions: ["bom1"]` setting in `.vc-config.json` is honoured with `--prebuilt` (the deployment's function details should show `bom1`). If it isn't, set the region in the Vercel project settings.
 - **Vercel deploy details.**
