@@ -47,9 +47,11 @@ export class Retriever {
   static async open(settings: Settings): Promise<Retriever> {
     const store = await openSearchStore(settings);
     const embedder = new Embedder(settings);
+    // Queries must use the prefix the stored vectors were built for, whatever QUERY_PREFIX says.
+    if (store.queryPrefix !== undefined) embedder.queryPrefix = store.queryPrefix;
     if (store.dim) {
-      // File index: the dimension is known, so skip the probe request. On a serverless cold
-      // start that saves a round trip and a request against free-tier rate limits.
+      // Supabase / file index: the dimension is known, so skip the probe request. On a serverless
+      // cold start that saves a round trip and a request against free-tier rate limits.
       embedder.dimension = store.dim;
     } else {
       await embedder.healthCheck();

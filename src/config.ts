@@ -10,7 +10,7 @@ const optionalInt = z.preprocess((v) => (v === "" || v === undefined ? undefined
 
 const schema = z.object({
   /** Only the ingestion pipeline needs the corpus; the API and the deployed app don't. */
-  CORPUS_DIR: z.string().default(""),
+  CORPUS_DIR: z.string().default("corpus"),
   // LM Studio defaults. CHAT_* / EMBED_* override them, so any OpenAI-compatible provider works.
   LMSTUDIO_BASE_URL: z.string().url().default("http://localhost:1234/v1"),
   LMSTUDIO_API_KEY: z.string().default("lm-studio"),
@@ -48,7 +48,7 @@ export interface Endpoint {
 }
 
 export interface Settings {
-  /** Absolute corpus path, or "" when CORPUS_DIR is not set. */
+  /** Absolute corpus path (default: corpus/ in the repo), or "" when CORPUS_DIR is set empty. */
   corpusDir: string;
   chat: Endpoint;
   /** Chat model id; empty = auto-pick the first non-embedding model the endpoint lists. */

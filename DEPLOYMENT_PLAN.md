@@ -4,7 +4,7 @@
 |---|---|
 | **Repo** | `mayur-gupta/hr-chatbot` (`main`) |
 | **Status** | Code done and tested locally. Accounts, keys and the first deploy still to do (§10) |
-| **Date** | 2026-11-19 (vector store moved to Supabase pgvector on 2026-11-25) |
+| **Date** | 2026-11-19 (vector store moved to Supabase pgvector on 2026-11-25; vectors loaded on every production deploy since 2026-11-27) |
 | **Scope** | Run the RAG chat app (React UI, chat API, Google sign-in) on Vercel for **$0/month**, with a GitHub Actions pipeline that tests, previews and ships every change |
 | **Use** | Personal, learning or portfolio project. See D4 before any commercial or real-employee use |
 
@@ -15,7 +15,7 @@
 The app ran only on a developer PC: LM Studio for models and a local Chroma server for vectors. The free deployment changes three things:
 
 1. **Models: the Gemini API free tier, through its OpenAI-compatible endpoint.** The code already used the OpenAI SDK, so the change is configuration plus a re-embed of the corpus.
-2. **Vectors: Supabase Postgres + pgvector (free tier).** The 7,500 chunk vectors live in the `kalvora-hr` project (ap-south-1, Mumbai), in a `vector(768)` column with an HNSW cosine index. One SQL function does top-k search with the country filter.
+2. **Vectors: Supabase Postgres + pgvector (free tier).** The 7,500 chunk vectors live in the `kalvora-hr` project (ap-south-1, Mumbai), in a `vector(768)` column with an HNSW cosine index. One SQL function does top-k search with the country filter. Every production deploy syncs them to the policy files in `corpus/` (D7).
 3. **Hosting: Vercel Hobby, built by GitHub Actions.** CI bundles the API into one Node function (Vercel Build Output API), pinned to `bom1` next to the database, and deploys it with the UI.
 
 Running cost: **$0/month.** The trade-offs are rate limits, non-commercial use only, and data-use terms. They are covered in §3, §11 and §13.
@@ -34,7 +34,8 @@ Running cost: **$0/month.** The trade-offs are rate limits, non-commercial use o
 | Database | Supabase project `kalvora-hr` (ref `txkivrtpuiqphwvdanei`, ap-south-1). Schema applied: [supabase/migrations](supabase/migrations). Tables are empty until §9 |
 | Deploy build | `npm run build:vercel` → `.vercel/output` (static UI + bundled function in `bom1`; the index is bundled only with `BUNDLE_INDEX=1`) |
 | CI/CD | [.github/workflows/pipeline.yml](.github/workflows/pipeline.yml), [retrieval-smoke.yml](.github/workflows/retrieval-smoke.yml), [dependabot.yml](.github/dependabot.yml), [scripts/smoke-deploy.mjs](scripts/smoke-deploy.mjs) |
-| Tests | 41 Vitest tests (parser, chunker, auth, config, file index, Supabase store mapping, local file-index structure when present) + `npm run smoke` retrieval checks |
+| Corpus | The 500 synthetic policy `.docx` files + `manifest.jsonl` in [corpus/](corpus) (9.2 MB, public with the repo; Kalvora is fictional). Default `CORPUS_DIR` |
+| Tests | 43 Vitest tests (parser on real policies from `corpus/`, chunker, auth, config, file index, Supabase store mapping, local file-index structure when present) + `npm run smoke` retrieval checks |
 
 **Verified locally:**
 - The file index gives the same smoke results as Chroma on the real corpus: 11/11 checks, 100% top-1 country accuracy. Distances agree to about 0.0005, and the only ranking differences are near-ties.
@@ -42,7 +43,7 @@ Running cost: **$0/month.** The trade-offs are rate limits, non-commercial use o
 
 - The Supabase search function, run as `service_role` on test rows: exact match at distance 0, and the country filter returns only that country. `anon` has no access to the tables or the function.
 
-**Not yet done:** the Supabase tables are empty. Ingest the corpus with Gemini embeddings into Supabase (§9) before deploying.
+**In progress:** the first load into Supabase (§9). 960 of 7,500 chunks were loaded on 2026-11-27. The free tier allows 1,000 embeddings a day, so it finishes in about 7 more daily runs (around 2026-12-04). Deploy to production after that, so the first deploy has nothing left to embed.
 
 ---
 
@@ -50,13 +51,13 @@ Running cost: **$0/month.** The trade-offs are rate limits, non-commercial use o
 
 | # | Decision | Choice | Alternatives | Why |
 |---|---|---|---|---|
-| D1 | Chat LLM | **Gemini API free tier**, a Flash-class model (pick the id with `npm run models`) | Groq free tier (also OpenAI-compatible); OpenRouter free models | Free, fast, OpenAI-compatible: only `.env` changes. Same key as D2 |
-| D2 | Embeddings | **`gemini-embedding-001` at 768 dimensions**, no task prefixes | Keep local nomic (no free host) | Free on the same key. Requires a one-time re-embed of the corpus (~118 batches of 64 chunks) |
+| D1 | Chat LLM | **Gemini API free tier, `gemini-3.5-flash-lite`** (chosen 2026-11-27: first token in ~1 s on a cited test answer; `gemini-3.5-flash` took 4–24 s with its default thinking, and the 3.7/3.8 Flash models returned 503 "high demand") | Groq free tier (also OpenAI-compatible); OpenRouter free models | Free, fast, OpenAI-compatible: only `.env` changes. Same key as D2 |
+| D2 | Embeddings | **`gemini-embedding-001` at 768 dimensions**, no task prefixes | Keep local nomic (no free host) | Free on the same key. Requires a one-time re-embed of the corpus: about 8 days on the free tier, which allows 1,000 embeddings a day (§9) |
 | D3 | Vector store | **Supabase pgvector, free tier** (`kalvora-hr`, ap-south-1). HNSW cosine index; `match_kalvora_chunks()` does top-k with an optional country filter (iterative scan, so filtered searches still return k rows). RLS on with no policies; only the server's secret key can read | File index in the repo (still available as `VECTOR_STORE=file`); Chroma Cloud (credits, then paid) | A real database for $0. Float vectors (~23 MB), text and the HNSW index come to well under 100 MB of the 500 MB free tier. Re-ingesting no longer means committing 13 MB, and the function bundle drops from ~17 MB to 3.5 MB. Cost: one network hop per query (kept short by `bom1`), and free projects pause after a week without use (§13) |
 | D4 | Vercel plan | **Hobby** | Pro (~$20/month) | Free. **Hobby is for non-commercial use only.** Use by a real company means Pro (and D1 moves to a paid, no-training tier) |
 | D5 | Who can sign in | **`ALLOWED_EMAILS=<your accounts>`** (or `ALLOWED_DOMAINS`) | Any Google account | Otherwise anyone with a Google account can use up the free model quota |
 | D6 | Production approval | **Required reviewer on the GitHub `production` environment**, if available | Auto-deploy on merge | Free on public repos. Private repos on GitHub Free don't get environment reviewers; there, branch protection (PR + passing CI) is the gate |
-| D7 | Ingestion | **Manual, from a developer machine** (§9), writing straight to Supabase | CI job pulling the corpus from storage | The corpus changes rarely and isn't in the repo |
+| D7 | Ingestion | **On every production deploy**, from `corpus/` in the repo: `npm run ingest -- --prune`, then `npm run smoke`, before the code ships. Manual runs (§9) still work | Manual only, from a developer machine; corpus in a private Supabase Storage bucket | The deployed vectors always match the committed policies, and a policy change is an ordinary PR. Content hashes make an unchanged deploy cost no embedding calls; `--prune` deletes removed policies. A failed load or smoke check stops the deploy. Previews share the database, so they read the production vectors and never load them. The corpus is synthetic, so a public repo is fine |
 
 ---
 
@@ -121,7 +122,8 @@ Vercel Function  /api/index   Node 24, bom1 (Mumbai), maxDuration 120 s, streami
    └──► Gemini /chat/completions  streaming, aborted when the client disconnects
 
 GitHub Actions ──► npm run build:vercel ──► vercel deploy --prebuilt ──► Preview (stable alias) / Production
-Developer PC   ──► VECTOR_STORE=supabase npm run ingest ──► Gemini embeddings ──► Supabase kalvora_chunks
+Production job ──► npm run ingest -- --prune (corpus/) ──► Gemini embeddings (changed chunks only) ──► Supabase kalvora_chunks
+Developer PC   ──► same command, by hand (first load, or a full --reset)
 ```
 
 **Why the Build Output API instead of `api/*.ts`:** the project uses TypeScript 7, whose package has no compiler JS API (`transpileModule` is missing), which Vercel's Node builder relies on. [scripts/build-vercel.mjs](scripts/build-vercel.mjs) bundles the function with esbuild and writes the routes itself:
@@ -139,7 +141,7 @@ What CI builds is exactly what runs, and Vercel never compiles anything.
 |---|---|---|
 | C1 | Google sign-in | `src/auth.ts`, `web/src/{Login,Root}.tsx`, … |
 | C2 | Handler split from the listener | `src/app.ts` (handler + Vercel default export), `src/server.ts` (local listener + static UI) |
-| C3 | Provider-neutral config: `CHAT_*`, `EMBED_*`, `EMBED_DIMENSIONS`, `EMBED_DELAY_MS`, each falling back to `LMSTUDIO_*`. `CORPUS_DIR` only needed for ingestion | `src/config.ts` |
+| C3 | Provider-neutral config: `CHAT_*`, `EMBED_*`, `EMBED_DIMENSIONS`, `EMBED_DELAY_MS`, each falling back to `LMSTUDIO_*`. `CORPUS_DIR` (default `corpus/`) only used for ingestion | `src/config.ts` |
 | C4 | Hosted-friendly model handling: no model-list or probe calls at start-up for hosted endpoints, 429-aware retries during ingestion, friendly rate-limit and key errors in the UI | `src/embedder.ts`, `src/answer.ts`, `src/app.ts` |
 | C5 | File vector index: int8, per-vector scale, atomic save, incremental upserts and stale deletes | `src/fileIndex.ts` |
 | C6 | One store interface for Chroma and the file index. Chroma loaded lazily, so it isn't in the bundle | `src/vectorStore.ts`, `src/retriever.ts`, `src/pipeline.ts`, `src/smoke.ts` |
@@ -150,6 +152,9 @@ What CI builds is exactly what runs, and Vercel never compiles anything.
 | C11 | `engines.node: 24.x`. `.gitignore` keeps all of `data/` out (the index too, since 2026-11-27) | `package.json`, `.gitignore`, `.gitattributes` |
 | C12 | Docs | `README.md`, `.env.example`, this file |
 | C13 | Supabase pgvector store (`VECTOR_STORE=supabase`, default on Vercel): schema migration, search function, incremental upserts, stale deletes, model check at start-up. The function region is set to `VERCEL_FUNCTION_REGION` (default `bom1`). The index is bundled only with `BUNDLE_INDEX=1`. `retrieval-smoke` now checks Supabase twice a week | `supabase/migrations/`, `src/supabaseStore.ts`, `src/vectorStore.ts`, `src/config.ts`, `scripts/build-vercel.mjs`, `.github/workflows/retrieval-smoke.yml`, `test/supabaseStore.test.ts` |
+| C14 | Vectors loaded on every production deploy (D7): corpus committed in `corpus/` (default `CORPUS_DIR`), `ingest --prune` (refused with `--country`/`--limit`, skipped if a document fails to parse), load + retrieval smoke before `vercel deploy`, and a manual *Run workflow* with `reset_vectors` for model changes | `corpus/`, `src/pipeline.ts`, `src/vectorStore.ts`, `src/supabaseStore.ts`, `src/fileIndex.ts`, `src/store.ts`, `.github/workflows/pipeline.yml` |
+| C15 | Query prefix taken from the store (Supabase meta, file index), not `QUERY_PREFIX`: an unset prefix on Vercel would otherwise fall back to nomic's `search_query: ` and quietly hurt retrieval. Supabase ingestion refuses a prefix change without `--reset` | `src/vectorStore.ts`, `src/supabaseStore.ts`, `src/embedder.ts`, `src/retriever.ts`, `test/fileIndex.test.ts` |
+| C16 | `ingest --max-embed N` embeds at most N chunks per run, leaving the rest for the next. The production load uses 950, so a deploy never uses up the free tier's 1,000 embeddings a day, which the live app needs for questions | `src/pipeline.ts`, `.github/workflows/pipeline.yml` |
 
 ---
 
@@ -159,19 +164,23 @@ What CI builds is exactly what runs, and Vercel never compiles anything.
 
 ```
 PR opened/updated ─► verify ─► deploy-preview ─► alias STAGING_HOST ─► smoke (signed in + one question) ─► PR comment
-push to main      ─► verify ─► [approval, if available] ─► deploy --prod ─► smoke (public) ─► (fail ⇒ vercel rollback)
+push to main      ─► verify ─► [approval, if available] ─► load vectors (corpus/ → Supabase) ─► retrieval smoke
+                                                          ─► deploy --prod ─► smoke (public) ─► (fail ⇒ vercel rollback)
+Run workflow (main) ─► same as push to main; tick reset_vectors to rebuild every vector (after an embedding-model change)
 Mon + Thu / manual ─► retrieval-smoke (Supabase vectors vs hosted embeddings; also keeps the free project active)
 ```
 
 `verify` runs `npm ci`, typecheck, tests, `npm run build:vercel` and `npm audit`. Deploy jobs rebuild `.vercel/output` and upload it with `vercel deploy --prebuilt`. Fork PRs get no preview, because they get no secrets.
+
+The production vector load runs `npm run ingest -- --prune` and then `npm run smoke`, before anything ships. With an unchanged corpus it embeds nothing ("To embed: 0") and takes seconds. Edited policies are re-embedded, removed ones deleted. If the load or the smoke check fails, the deploy stops and the live app keeps its code (vectors written before the failure stay; the next run finishes the job). A rollback reverts code only, not vectors.
 
 ### 7.2 GitHub settings
 
 | Setting | Value |
 |---|---|
 | Branch protection on `main` | Require PR, require the `verify` check, block force-pushes |
-| Repo secrets | `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `SMOKE_SESSION_SECRET` (= the **preview** `SESSION_SECRET`), `VERCEL_AUTOMATION_BYPASS_SECRET`, `SMOKE_EMBED_API_KEY`, `SUPABASE_SECRET_KEY` (for `retrieval-smoke`) |
-| Repo variables | `STAGING_HOST`, `PRODUCTION_HOST`, `SMOKE_EMAIL` (must pass the preview allowlist), `EMBED_BASE_URL`, `EMBED_MODEL`, `EMBED_DIMENSIONS`, `SUPABASE_URL` |
+| Repo secrets | `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`, `SMOKE_SESSION_SECRET` (= the **preview** `SESSION_SECRET`), `VERCEL_AUTOMATION_BYPASS_SECRET`, `EMBED_API_KEY` (a Gemini key) and `SUPABASE_SECRET_KEY`, both used by the production vector load and `retrieval-smoke` |
+| Repo variables | `STAGING_HOST`, `PRODUCTION_HOST`, `SMOKE_EMAIL` (must pass the preview allowlist), `EMBED_BASE_URL`, `EMBED_MODEL`, `EMBED_DIMENSIONS`, `SUPABASE_URL`. `EMBED_MODEL` and `EMBED_DIMENSIONS` must match the Vercel values, since the load writes the vectors the app queries |
 | Environments | `preview`, `production`. Add a required reviewer to `production` if your plan allows it (D6) |
 
 The production `SESSION_SECRET` is never stored in GitHub. That's why the production smoke test only checks endpoints that don't need sign-in.
@@ -203,11 +212,11 @@ Google needs exact JavaScript origins; wildcards aren't allowed. So:
 |---|---|---|---|---|
 | `CHAT_BASE_URL` / `EMBED_BASE_URL` | empty (LM Studio) | `https://generativelanguage.googleapis.com/v1beta/openai/` | same | |
 | `CHAT_API_KEY` / `EMBED_API_KEY` | empty | Gemini key (preview) | Gemini key (prod) | Sensitive |
-| `CHAT_MODEL` | (auto) | Flash model id | same | Required for hosted endpoints |
+| `CHAT_MODEL` | `gemini-3.5-flash-lite` | `gemini-3.5-flash-lite` | same | Required for hosted endpoints (D1) |
 | `EMBED_MODEL` | LM Studio nomic | `gemini-embedding-001` | same | Must match the stored vectors (checked at start-up) |
 | `EMBED_DIMENSIONS` | empty | `768` | `768` | Must be 768: the Supabase column is `vector(768)` |
-| `DOC_PREFIX` / `QUERY_PREFIX` | nomic prefixes | `""` | `""` | |
-| `VECTOR_STORE` | `chroma` | (defaults to `supabase` on Vercel) | same | |
+| `DOC_PREFIX` / `QUERY_PREFIX` | `""` for Gemini (nomic needs its prefixes) | not set | not set | Queries use the prefix stored with the vectors in `kalvora_index_meta`, so Vercel needs neither (it can't hold an empty value anyway). Ingestion refuses to mix prefixes |
+| `VECTOR_STORE` | `supabase` (or `chroma`/`file`) | not set (defaults to `supabase` on Vercel) | same | |
 | `SUPABASE_URL` | for ingestion | `https://txkivrtpuiqphwvdanei.supabase.co` | same | One shared project is fine: previews only read |
 | `SUPABASE_SECRET_KEY` | for ingestion | `sb_secret_…` | same (or a separate secret key) | Sensitive. Supabase > Project Settings > API Keys |
 | `TOP_K` | 6 | 6 | 6 | |
@@ -215,20 +224,24 @@ Google needs exact JavaScript origins; wildcards aren't allowed. So:
 | `SESSION_SECRET` | 32+ chars | random, preview-only | random, prod-only | Sensitive |
 | `ALLOWED_EMAILS` / `ALLOWED_DOMAINS` | – | your accounts + `SMOKE_EMAIL` | your accounts | D5 |
 | `SESSION_TTL_HOURS` | 168 | 24 | 168 | |
-| `CORPUS_DIR`, `EMBED_DELAY_MS` | ingestion only | – | – | |
+| `CORPUS_DIR`, `EMBED_DELAY_MS` | ingestion only (`CORPUS_DIR` defaults to `corpus/`) | – | – | The production vector load in CI uses `corpus/` and `EMBED_DELAY_MS=1000` |
 
 ---
 
 ## 9. Runbook: loading Supabase with Gemini embeddings
 
-1. In `.env`, set the Gemini variables (see `.env.example`), `EMBED_DIMENSIONS=768`, `VECTOR_STORE=supabase`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY`. Use `EMBED_DELAY_MS=1000` or more to stay under the per-minute limit.
+**First load (from a developer machine, over about 8 days).** The Gemini free tier allows **1,000 embedding requests per day per project, and each chunk counts as one** (batching doesn't help). Verified 2026-11-27: the first run stopped at 960 chunks with `embed_content_free_tier_requests, limit: 1000`. The quota resets at midnight Pacific time (13:30 IST) and is shared with the live app's question embeddings and the smoke checks. So the 7,500 chunks load in daily runs of at most 950, leaving ~50 requests for checks and test questions. Paid tier instead: about $0.20 for the whole corpus at $0.15 per 1M tokens, but it needs a billing account with $5 minimum prepaid credit.
+
+1. In `.env`, set the Gemini variables (see `.env.example`), `EMBED_DIMENSIONS=768`, `VECTOR_STORE=supabase`, `SUPABASE_URL` and `SUPABASE_SECRET_KEY`. Use `EMBED_DELAY_MS=1000` or more to stay under the per-minute limit. Leave `CORPUS_DIR` unset so it uses `corpus/`, the same files CI loads.
 2. `npm run models`: confirm the key works and pick `CHAT_MODEL`.
 3. `npm run ingest:dry`: expect 7,500 chunks.
-4. `npm run ingest -- --reset`: embeds about 118 batches and upserts each one to Supabase as it goes. If the daily quota runs out, re-run without `--reset` the next day; only missing chunks are embedded.
-5. `npm run smoke`: all labelled checks must pass. If the country accuracy drops, try `TOP_K=8` or check `EMBED_DIMENSIONS`.
-6. Open a PR. The preview smoke test exercises Supabase end to end. Nothing needs committing for a data change.
+4. Once a day, after the quota resets: `npm run ingest -- --prune --max-embed 950`. Each run embeds up to 950 missing chunks and upserts them batch by batch, and says how many are left. Repeat until it reports `To embed: 0`. Use `--reset` only to wipe and start over.
+5. When all 7,500 are loaded, `npm run smoke`: all labelled checks must pass (it fails on a partial load, since some countries' policies are still missing). If the country accuracy drops, try `TOP_K=8` or check `EMBED_DIMENSIONS`.
+6. Open a PR. The preview smoke test exercises Supabase end to end.
 
-When policies change, re-run step 4 without `--reset`: only changed sections are re-embedded, and removed sections are deleted. Production picks this up immediately, with no deploy.
+**Policy changes (automatic).** Add, edit or delete files in `corpus/` and update `corpus/manifest.jsonl` to match. Open a PR (the preview still reads the current vectors) and merge it. The production deploy re-embeds the changed sections, deletes removed ones, runs the retrieval smoke, then ships.
+
+**Embedding model change.** Change `EMBED_MODEL`/`EMBED_DIMENSIONS` in the repo variables and in Vercel, then run the Pipeline workflow on `main` with **reset_vectors** ticked. On the free tier a rebuild takes about 8 days of daily runs (950 per run), and search is incomplete until it finishes, so plan it or use the paid tier for the rebuild. Without the reset, the load refuses to mix models.
 
 New Supabase project: apply [supabase/migrations](supabase/migrations) first (SQL editor or `supabase db push`).
 
@@ -271,6 +284,7 @@ New Supabase project: apply [supabase/migrations](supabase/migrations) first (SQ
 - [ ] Hitting the rate limit shows the friendly message (FR-9). Test by sending questions quickly.
 - [ ] A PR gets a preview comment, and sign-in works on `STAGING_HOST`.
 - [ ] Merging deploys to production and passes smoke. A deliberately broken deploy is rolled back.
+- [ ] The production job's vector load reports "To embed: 0" on a deploy with an unchanged corpus, and re-embeds only the edited sections when a policy changes.
 - [ ] `retrieval-smoke` passes on a manual run.
 - [ ] No secrets in the repo or in `.vercel/output/static`.
 
@@ -283,7 +297,9 @@ New Supabase project: apply [supabase/migrations](supabase/migrations) first (SQ
 | Free-tier rate limits hit with several users | Medium | Answers fail for a minute | Friendly message (FR-9), allowlist, separate preview/prod keys. Groq as a drop-in alternative |
 | Google changes free-tier limits, model names or data terms | Medium | Medium | Everything is configured through environment variables. `retrieval-smoke` runs twice a week. Re-check terms (SEC-7) |
 | Gemini retrieval quality differs from nomic | Low–Medium | Medium | `npm run smoke` gates the rollout (§9 step 5) |
-| Re-embed blocked by the daily quota | Medium | Ingestion takes 2 days | Incremental ingestion, upserted per batch (§9 step 4) |
+| Free-tier embedding quota (1,000 a day, each chunk counts) | Certain | A full load or rebuild takes about 8 days; search is incomplete meanwhile, and the production smoke check fails until it completes | Incremental ingestion, upserted per batch, so each run resumes. `--max-embed 950` leaves headroom for the app and checks (§9). Paid tier finishes it for about $0.20 |
+| A PR's policy edits aren't in its preview | Certain | Preview answers use the current policies | By design: previews share the production database and never write to it. Check the dry-run chunk counts in review; the edits go live on merge |
+| A broken `corpus/` change (e.g. an unparsable file) | Low | Deploy stops | Parse failures fail the load and `--prune` is skipped, so no vectors are lost. `verify` parses real policies in tests |
 | Supabase free project paused after a week without use | Medium (quiet weeks) | All answers fail until it's restored | `retrieval-smoke` queries it Mon + Thu. If paused, restore it in the dashboard (takes a few minutes). The error message names the cause. Supabase Pro ($25/month) never pauses |
 | Supabase unreachable or slow | Low | Answers fail or slow | Function and database are both in Mumbai. Fallback: `VECTOR_STORE=file` with `BUNDLE_INDEX=1` (needs a Gemini-built `data/index`) |
 | Build Output API details (`nodejs24.x`, `--prebuilt` without `vercel build`) behave differently than expected | Low | Deploy fails | Phase 3 manual deploy catches it before CI. Fallback runtime `nodejs22.x` |
@@ -294,7 +310,7 @@ New Supabase project: apply [supabase/migrations](supabase/migrations) first (SQ
 
 ## 14. Still to verify on the first deploy
 
-- **Gemini model ids and limits.** Check the model ids and current free-tier limits in AI Studio. The docs page doesn't list free-tier numbers, and names change often.
+- **Gemini model ids and limits.** Partly verified on 2026-11-27: `gemini-embedding-001` is limited to 1,000 requests a day on the free tier (each chunk counts), and `gemini-3.5-flash-lite` answers. Check the chat model's daily limit in AI Studio (https://ai.dev/rate-limit) before inviting users.
 - **Gemini embedding dimensions.** Check that `dimensions` (768) is honoured through the OpenAI-compatible endpoint. Ingestion refuses anything but 768, because the Supabase column is `vector(768)`. If the endpoint ignores it, change the column size in a new migration and in `SCHEMA_DIM` (HNSW supports up to 2,000 dimensions).
 - **Function region.** Check that the `regions: ["bom1"]` setting in `.vc-config.json` is honoured with `--prebuilt` (the deployment's function details should show `bom1`). If it isn't, set the region in the Vercel project settings.
 - **Vercel deploy details.**

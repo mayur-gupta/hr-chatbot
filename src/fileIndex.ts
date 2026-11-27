@@ -141,10 +141,10 @@ export class FileIndex {
     });
   }
 
-  /** Remove chunks of the given docs that are not in `keep`. Returns how many were removed. */
-  deleteStale(docIds: string[], keep: Set<string>): number {
-    const docs = new Set(docIds);
-    const drop = this.entries.map((e) => docs.has(e.docId) && !keep.has(e.id));
+  /** Remove chunks of the given docs (or of any doc, with "all") that are not in `keep`. Returns how many were removed. */
+  deleteStale(docIds: string[] | "all", keep: Set<string>): number {
+    const docs = docIds === "all" ? null : new Set(docIds);
+    const drop = this.entries.map((e) => (!docs || docs.has(e.docId)) && !keep.has(e.id));
     const removed = drop.filter(Boolean).length;
     if (removed) {
       this.entries = this.entries.filter((_, i) => !drop[i]);

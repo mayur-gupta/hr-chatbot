@@ -76,8 +76,18 @@ export async function upsertChunks(col: Collection, chunks: Chunk[], embeddings:
   });
 }
 
-/** Delete chunks of the given docs that are no longer produced. Returns how many were removed. */
-export async function deleteStale(col: Collection, docIds: string[], keep: Set<string>): Promise<number> {
+/** Delete chunks of the given docs (or of any doc, with "all") that are no longer produced. Returns how many were removed. */
+export async function deleteStale(col: Collection, docIds: string[] | "all", keep: Set<string>): Promise<number> {
+  if (docIds === "all") {
+    const stale: string[] = [];
+    for (let offset = 0; ; offset += READ_PAGE) {
+      const res = await col.get({ include: [], limit: READ_PAGE, offset });
+      stale.push(...res.ids.filter((id) => !keep.has(id)));
+      if (res.ids.length < READ_PAGE) break;
+    }
+    for (let i = 0; i < stale.length; i += READ_PAGE) await col.delete({ ids: stale.slice(i, i + READ_PAGE) });
+    return stale.length;
+  }
   let removed = 0;
   for (let i = 0; i < docIds.length; i += 50) {
     const batch = docIds.slice(i, i + 50);

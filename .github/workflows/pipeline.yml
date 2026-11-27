@@ -4,12 +4,18 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch: # Actions > Pipeline > Run workflow (on main): redeploy, optionally rebuilding every vector
+    inputs:
+      reset_vectors:
+        description: "Rebuild all vectors from scratch (needed after changing EMBED_MODEL or EMBED_DIMENSIONS; search returns nothing until it finishes)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 # Runtime settings (model keys, SESSION_SECRET, GOOGLE_CLIENT_ID...) live in the Vercel project's
-# environment variables, not here. The build needs no secrets.
+# environment variables, not here. The build needs no secrets; the production vector load does.
 env:
   VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
   VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
@@ -25,12 +31,13 @@ jobs:
         with: { node-version: 24, cache: npm }
       - run: npm ci
       - run: npm run typecheck
-      - run: npm test # no network; the data/index check skips here (the index isn't in git)
+      - run: npm test # no network; parses real policies from corpus/; the data/index check skips (not in git)
       - run: npm run build:vercel # proves the deploy bundle builds
       - run: npm audit --omit=dev --audit-level=high
 
   deploy-preview:
-    # Fork PRs get no secrets, so no preview (the safe default).
+    # Fork PRs get no secrets, so no preview (the safe default). Previews read the production
+    # vectors and never load them: a PR's corpus/ edits reach Supabase only after merge.
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     needs: verify
     runs-on: ubuntu-latest
@@ -64,7 +71,7 @@ jobs:
             await github.rest.issues.createComment({ ...context.repo, issue_number: context.issue.number, body });
 
   deploy-production:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     needs: verify
     runs-on: ubuntu-latest
     # Add a required reviewer to this environment in repo settings for a manual approval gate
@@ -76,6 +83,31 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with: { node-version: 24, cache: npm }
       - run: npm ci
+      - name: Load vectors into Supabase from corpus/, then check retrieval
+        # Every deploy syncs Supabase to corpus/: new or edited chunks are embedded (unchanged ones
+        # are skipped by content hash) and chunks of removed policies are deleted. It runs before
+        # the code ships, so a failed load or smoke check leaves the live app as it was.
+        timeout-minutes: 45
+        env:
+          VECTOR_STORE: supabase
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_SECRET_KEY: ${{ secrets.SUPABASE_SECRET_KEY }}
+          EMBED_BASE_URL: ${{ vars.EMBED_BASE_URL }}
+          EMBED_MODEL: ${{ vars.EMBED_MODEL }}
+          EMBED_DIMENSIONS: ${{ vars.EMBED_DIMENSIONS }}
+          EMBED_API_KEY: ${{ secrets.EMBED_API_KEY }}
+          EMBED_DELAY_MS: "1000"
+          DOC_PREFIX: ""
+          QUERY_PREFIX: ""
+          RESET_VECTORS: ${{ inputs.reset_vectors }}
+        # Gemini's free tier allows 1,000 embeddings a day per project (each chunk counts), shared
+        # with the live app's questions. --max-embed keeps a deploy from using them all; whatever is
+        # left is embedded by the next run.
+        run: |
+          flags="--prune --max-embed 950"
+          if [ "$RESET_VECTORS" = "true" ]; then flags="$flags --reset"; fi
+          npm run ingest -- $flags
+          npm run smoke
       - run: npm run build:vercel # writes .vercel/output (UI + bundled function; vectors live in Supabase)
       - run: npm i -g "$VERCEL_CLI"
       - id: deploy

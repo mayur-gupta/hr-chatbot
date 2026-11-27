@@ -2,7 +2,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadSettings } from "../src/config.js";
 import { FileIndex, quantize } from "../src/fileIndex.js";
+import { openSearchStore } from "../src/vectorStore.js";
 import type { Chunk } from "../src/types.js";
 
 const DIM = 64;
@@ -87,6 +89,8 @@ describe("FileIndex", () => {
     expect(index.hashes().get("A::s01")).toBe("h2");
     expect(index.deleteStale(["A"], new Set(["A::s01"]))).toBe(1);
     expect([...index.hashes().keys()].sort()).toEqual(["A::s01", "B::s01"]);
+    expect(index.deleteStale("all", new Set(["A::s01"]))).toBe(1); // B left the corpus
+    expect([...index.hashes().keys()]).toEqual(["A::s01"]);
   });
 
   it("round-trips through save/load", () => {
@@ -104,6 +108,21 @@ describe("FileIndex", () => {
       loaded.upsert([chunk("NEW::s01")], [vec()]);
       loaded.save(dir);
       expect(FileIndex.load(dir).size).toBe(chunks.length + 1);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports the query prefix it was built with, overriding QUERY_PREFIX", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "kal-index-"));
+    try {
+      const index = FileIndex.create({ embedModel: "m", dim: DIM, docPrefix: "", queryPrefix: "" });
+      index.upsert(chunks, vectors);
+      index.save(dir);
+      // QUERY_PREFIX unset means the nomic default ("search_query: "); the index says "".
+      const store = await openSearchStore(loadSettings({ VECTOR_STORE: "file", INDEX_DIR: dir, EMBED_MODEL: "m" }));
+      expect(store.queryPrefix).toBe("");
+      expect(store.dim).toBe(DIM);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
